@@ -3,9 +3,12 @@
     Clean tabbed UI with drag & resize (Xeno-compatible)
 ]]
 
+-- Simplified logger that only uses standard print to avoid opening executor consoles
 local function debugLog(msg)
-    if type(print) == "function" then pcall(function() print("[CAPY.GG] " .. tostring(msg)) end) end
-    if type(rconsoleprint) == "function" then pcall(function() rconsoleprint("[CAPY.GG] " .. tostring(msg) .. "\n") end) end
+    if type(print) == "function" then
+        pcall(function() print("[CAPY.GG] " .. tostring(msg)) end)
+    end
+    -- rconsoleprint omitted intentionally to prevent console pop‑up in executors
 end
 
 debugLog("Script loading...")
@@ -29,9 +32,14 @@ local Lighting = safeGetService("Lighting")
 local TeleportService = safeGetService("TeleportService")
 local Workspace = safeGetService("Workspace")
 
+-- Ensure we have a valid LocalPlayer before proceeding
 local LocalPlayer = Players and Players.LocalPlayer or nil
 if not LocalPlayer and Players then
-    pcall(function() LocalPlayer = Players:WaitForChild("LocalPlayer", 5) end)
+    -- Wait until the LocalPlayer instance appears (no timeout to guarantee UI creation)
+    while not LocalPlayer do
+        task.wait(0.1)
+        LocalPlayer = Players.LocalPlayer
+    end
 end
 
 local Camera = Workspace and Workspace.CurrentCamera or nil
@@ -244,15 +252,37 @@ debugLog("Building UI...")
 local function buildUI()
     if not LocalPlayer then debugLog("LocalPlayer is nil") return nil end
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if not pg then debugLog("PlayerGui not found") return nil end
-    
+    -- Wait for PlayerGui to be ready if it isn't yet
+    while not pg do
+        task.wait(0.1)
+        pg = LocalPlayer:FindFirstChild("PlayerGui")
+    end
     local sg = Instance.new("ScreenGui")
     sg.Name = "CapyggUI"
     sg.ResetOnSpawn = false
-    sg.Parent = pg
+    if pg then
+        sg.Parent = pg
+    else
+        -- Fallback to CoreGui if PlayerGui is unavailable (some executors)
+        sg.Parent = game:GetService("CoreGui")
+    end
+    sg.Enabled = true
+    sg.IgnoreGuiInset = true
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    -- Test label to confirm UI is rendering
+    local testLabel = Instance.new("TextLabel")
+    testLabel.Size = UDim2.new(0, 200, 0, 30)
+    testLabel.Position = UDim2.new(0, 10, 0, 50)
+    testLabel.BackgroundTransparency = 0.5
+    testLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    testLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    testLabel.Text = "Capy.gg UI Loaded"
+    testLabel.Parent = sg
     
     local win = Instance.new("Frame")
     win.Name = "Window"
+    win.ZIndex = 100
+    win.Active = true
     win.Size = UDim2.new(0, 750, 0, 650)
     win.Position = UDim2.new(0.5, -375, 0.5, -325)
     win.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
@@ -473,11 +503,20 @@ local function buildUI()
     debugBtn.MouseButton1Click:Connect(function()
         notify("Debug", "Button works!", 2)
     end)
+    win.Visible = true
     return win
 end
 
 local w = nil
 pcall(function() w = buildUI() end)
+-- Confirm UI was created
+if w then
+    debugLog("Capy.gg UI successfully created")
+    notify("Capy.gg", "UI loaded", 3)
+else
+    debugLog("Capy.gg UI failed to create")
+    notify("Capy.gg", "UI failed", 5)
+end
 
 if RunService then pcall(function() RunService.Heartbeat:Connect(function() if noclipEnabled then runNoClip() end updateFly() end) end) end
 if LocalPlayer then pcall(function() LocalPlayer.CharacterAdded:Connect(function(c) pcall(function() if noclipEnabled then runNoClip() end if flyEnabled then enableFly(true) end end) end) end) end

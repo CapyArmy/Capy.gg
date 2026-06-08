@@ -461,6 +461,18 @@ local function buildUI()
     local mb = tb:FindFirstChild("MainBtn") or tb:GetChildren()[1]
     if mb then mb.BackgroundColor3 = Color3.fromRGB(0, 120, 80) mb.TextColor3 = Color3.fromRGB(255, 255, 255) end
     
+    -- Debug button to verify UI elements are visible
+    local debugBtn = Instance.new("TextButton")
+    debugBtn.Size = UDim2.new(0, 120, 0, 30)
+    debugBtn.Position = UDim2.new(0, 10, 0, 10)
+    debugBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    debugBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    debugBtn.Text = "Debug"
+    debugBtn.BorderSizePixel = 0
+    debugBtn.Parent = win
+    debugBtn.MouseButton1Click:Connect(function()
+        notify("Debug", "Button works!", 2)
+    end)
     return win
 end
 

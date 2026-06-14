@@ -42,13 +42,13 @@ if not LocalPlayer and Players then
     end
 end
 
-local Camera = Workspace and Workspace.CurrentCamera or nil
-
 if not Players or not LocalPlayer then
     debugLog("WARNING: Cannot load LocalPlayer, continuing anyway...")
 end
 
 local espMap, connections, noclipEnabled, flyEnabled, flySpeed, flyBody = {}, {}, false, false, 100, nil
+local espEnabled = false
+local espPlayerRemovingConn, espPlayerAddedConn
 local originalLighting = {}
 local DISCORD_INVITE = "https://discord.gg/XgTmqNRP4K"
 
@@ -93,23 +93,56 @@ local function setFullBright(e)
     end
 end
 
+local function attachEspToPlayer(p)
+    if not p or p == LocalPlayer then return end
+    local head = p.Character and p.Character:FindFirstChild("Head")
+    if not head then return end
+    local existing = espMap[p]
+    if existing then
+        if existing.Parent then existing:Destroy() end
+        espMap[p] = nil
+    end
+    local bb = Instance.new("BillboardGui")
+    bb.Name, bb.Adornee, bb.AlwaysOnTop, bb.Size = "ESP", head, true, UDim2.new(0, 140, 0, 40)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size, lbl.BackgroundTransparency, lbl.Font, lbl.TextSize, lbl.TextColor3 = UDim2.new(1,0,1,0), 1, Enum.Font.GothamBold, 14, Color3.fromRGB(255,255,255)
+    lbl.TextStrokeTransparency, lbl.TextStrokeColor3, lbl.Text = 0, Color3.fromRGB(0,0,0), p.Name
+    lbl.Parent = bb
+    bb.Parent = head
+    espMap[p] = bb
+end
+
 local function refreshEsp(e)
+    if not Players then return end
+    espEnabled = e
     if e then
         for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("Head") then
-                if not espMap[p] then
-                    local bb = Instance.new("BillboardGui")
-                    bb.Name, bb.Adornee, bb.AlwaysOnTop, bb.Size = "ESP", p.Character.Head, true, UDim2.new(0, 140, 0, 40)
-                    local lbl = Instance.new("TextLabel")
-                    lbl.Size, lbl.BackgroundTransparency, lbl.Font, lbl.TextSize, lbl.TextColor3 = UDim2.new(1,0,1,0), 1, Enum.Font.GothamBold, 14, Color3.fromRGB(255,255,255)
-                    lbl.TextStrokeTransparency, lbl.TextStrokeColor3, lbl.Text = 0, Color3.fromRGB(0,0,0), p.Name
-                    lbl.Parent = bb
-                    bb.Parent = p.Character.Head
-                    espMap[p] = bb
-                end
-            end
+            attachEspToPlayer(p)
         end
+        if espPlayerRemovingConn then espPlayerRemovingConn:Disconnect() end
+        espPlayerRemovingConn = Players.PlayerRemoving:Connect(function(p)
+            local bb = espMap[p]
+            if bb then
+                if bb.Parent then bb:Destroy() end
+                espMap[p] = nil
+            end
+        end)
+        if espPlayerAddedConn then espPlayerAddedConn:Disconnect() end
+        espPlayerAddedConn = Players.PlayerAdded:Connect(function(p)
+            attachEspToPlayer(p)
+            p.CharacterAdded:Connect(function()
+                if espEnabled then attachEspToPlayer(p) end
+            end)
+        end)
     else
+        if espPlayerRemovingConn then
+            espPlayerRemovingConn:Disconnect()
+            espPlayerRemovingConn = nil
+        end
+        if espPlayerAddedConn then
+            espPlayerAddedConn:Disconnect()
+            espPlayerAddedConn = nil
+        end
         for _, bb in pairs(espMap) do if bb and bb.Parent then bb:Destroy() end end
         espMap = {}
     end
@@ -120,36 +153,42 @@ local function runNoClip()
     for _, p in ipairs(LocalPlayer.Character:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
 end
 
+local function disableNoClip()
+    if not LocalPlayer or not LocalPlayer.Character then return end
+    for _, p in ipairs(LocalPlayer.Character:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = true end end
+end
+
 local function enableFly(e)
     if not LocalPlayer then return end
     local r = getRootPart(LocalPlayer)
-    if not r then return end
     flyEnabled = e
-    if e then
-        flyBody = Instance.new("BodyVelocity")
-        flyBody.MaxForce = Vector3.new(1e5, 1e5, 1e5)
-        flyBody.Velocity = Vector3.new(0, 0, 0)
-        flyBody.Parent = r
-    else
-        if flyBody then flyBody:Destroy() flyBody = nil end
-    end
+    if flyBody then flyBody:Destroy(); flyBody = nil end
+    if not e or not r then return end
+    flyBody = Instance.new("BodyVelocity")
+    flyBody.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+    flyBody.Velocity = Vector3.new(0, 0, 0)
+    flyBody.Parent = r
 end
 
 local function updateFly()
-    if not flyEnabled or not flyBody or not Camera or not UserInputService then return end
+    if not flyEnabled or not flyBody or not UserInputService then return end
+    local camera = Workspace and Workspace.CurrentCamera
+    if not camera then return end
     local d = Vector3.new(0, 0, 0)
-    if UserInputService:IsKeyDown(Enum.KeyCode.W) then d = d + Camera.CFrame.LookVector end
-    if UserInputService:IsKeyDown(Enum.KeyCode.S) then d = d - Camera.CFrame.LookVector end
-    if UserInputService:IsKeyDown(Enum.KeyCode.A) then d = d - Camera.CFrame.RightVector end
-    if UserInputService:IsKeyDown(Enum.KeyCode.D) then d = d + Camera.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then d = d + camera.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then d = d - camera.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then d = d - camera.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then d = d + camera.CFrame.RightVector end
     if UserInputService:IsKeyDown(Enum.KeyCode.Space) then d = d + Vector3.new(0, 1, 0) end
     if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then d = d - Vector3.new(0, 1, 0) end
     flyBody.Velocity = (d.Magnitude > 0 and d.Unit * flySpeed) or Vector3.new(0, 0, 0)
 end
 
 local function killAllHumanoids()
+    if not Workspace or not LocalPlayer then return end
+    local char = LocalPlayer.Character
     for _, o in ipairs(Workspace:GetDescendants()) do
-        if o:IsA("Humanoid") and o.Parent ~= LocalPlayer.Character then o.Health = 0 end
+        if o:IsA("Humanoid") and o.Parent ~= char then o.Health = 0 end
     end
     notify("Combat", "All humanoids killed.", 3)
 end
@@ -158,11 +197,15 @@ local function killTarget()
     if not LocalPlayer then return end
     local m = LocalPlayer:GetMouse()
     local h = m.Target and m.Target.Parent and m.Target.Parent:FindFirstChildOfClass("Humanoid")
-    if h and h.Health > 0 and m.Target.Parent ~= LocalPlayer.Character then h.Health = 0 notify("Combat", "Target eliminated.", 2) end
+    if h and h.Health > 0 and m.Target.Parent ~= LocalPlayer.Character then
+        h.Health = 0
+        notify("Combat", "Target eliminated.", 2)
+    end
 end
 
 local function antiAfk(e)
     if e then
+        if not LocalPlayer then return end
         connections["AntiAfk"] = LocalPlayer.Idled:Connect(function()
             local vu = game:GetService("VirtualUser")
             vu:Button2Down(Vector2.new(0,0))
@@ -170,7 +213,7 @@ local function antiAfk(e)
             vu:Button2Up(Vector2.new(0,0))
         end)
     else
-        if connections["AntiAfk"] then connections["AntiAfk"]:Disconnect() connections["AntiAfk"] = nil end
+        if connections["AntiAfk"] then connections["AntiAfk"]:Disconnect(); connections["AntiAfk"] = nil end
     end
 end
 
@@ -180,27 +223,38 @@ end
 
 local function infiniteJump(e)
     if e then
+        if not UserInputService or not LocalPlayer then return end
         connections["InfiniteJump"] = UserInputService.JumpRequest:Connect(function()
             local h = LocalPlayer and getHumanoid(LocalPlayer)
             if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
         end)
     else
-        if connections["InfiniteJump"] then connections["InfiniteJump"]:Disconnect() connections["InfiniteJump"] = nil end
+        if connections["InfiniteJump"] then connections["InfiniteJump"]:Disconnect(); connections["InfiniteJump"] = nil end
     end
 end
 
 local function loadInfiniteYield()
-    local ok, src = pcall(function() return safeHttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source") end)
-    if ok and src then
-        local l = pcall(function() loadstring(src)() end)
-        notify("Capy.gg", l and "Infinite Yield loaded." or "Failed to load IY", 3)
-    else
+    local src = safeHttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source")
+    if not src then
         notify("Capy.gg", "Failed to fetch Infinite Yield.", 4)
+        return
     end
+    local loader = loadstring or load
+    if type(loader) ~= "function" then
+        notify("Capy.gg", "Failed to load IY (no loader available).", 3)
+        return
+    end
+    local okCompile, compiled = pcall(function() return loader(src) end)
+    if not okCompile or type(compiled) ~= "function" then
+        notify("Capy.gg", "Failed to compile Infinite Yield.", 3)
+        return
+    end
+    local ok = pcall(compiled)
+    notify("Capy.gg", ok and "Infinite Yield loaded." or "Failed to load IY", 3)
 end
 
 local function getClosestPlayer()
-    if not LocalPlayer then return nil end
+    if not Players or not LocalPlayer then return nil end
     local closest, dist = nil, math.huge
     local r = getRootPart(LocalPlayer)
     if not r then return nil end
@@ -209,7 +263,7 @@ local function getClosestPlayer()
             local pr = getRootPart(p)
             if pr then
                 local d = (r.Position - pr.Position).Magnitude
-                if d < dist then dist = d closest = p end
+                if d < dist then dist = d; closest = p end
             end
         end
     end
@@ -217,19 +271,19 @@ local function getClosestPlayer()
 end
 
 local function teleportToPlayer(n)
-    if not LocalPlayer then return end
+    if not Players or not LocalPlayer then return end
     local t = Players:FindFirstChild(n)
-    if not t then notify("Teleport", "Player not found", 4) return end
+    if not t then notify("Teleport", "Player not found", 4); return end
     local tr, lr = getRootPart(t), getRootPart(LocalPlayer)
     if tr and lr then lr.CFrame = tr.CFrame + Vector3.new(0, 5, 0) end
 end
 
 local function cleanupEsp()
-    for _, bb in pairs(espMap) do if bb and bb.Parent then bb:Destroy() end end
-    espMap = {}
+    refreshEsp(false)
 end
 
 local function toggleChams(e)
+    if not Players then return end
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
             local c = getCharacter(p)
@@ -250,197 +304,250 @@ local function cleanupVisuals() cleanupEsp() toggleChams(false) setFullBright(fa
 debugLog("Building UI...")
 
 local function buildUI()
-    if not LocalPlayer then debugLog("LocalPlayer is nil") return nil end
+    if not LocalPlayer then debugLog("LocalPlayer is nil"); return nil end
+    if not UserInputService then debugLog("UserInputService is nil"); return nil end
+
+    local C = {
+        bg       = Color3.fromRGB(18, 18, 24),
+        surface  = Color3.fromRGB(26, 26, 34),
+        surface2 = Color3.fromRGB(34, 34, 44),
+        accent   = Color3.fromRGB(16, 185, 129),
+        accentH  = Color3.fromRGB(5, 150, 105),
+        text     = Color3.fromRGB(241, 245, 249),
+        muted    = Color3.fromRGB(148, 163, 184),
+        border   = Color3.fromRGB(51, 65, 85),
+        header   = Color3.fromRGB(100, 116, 139),
+    }
+
+    local function stroke(parent, color, thickness)
+        local s = Instance.new("UIStroke")
+        s.Color = color or C.border
+        s.Thickness = thickness or 1
+        s.Transparency = 0.35
+        s.Parent = parent
+        return s
+    end
+
+    local function corner(parent, radius)
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, radius or 8)
+        c.Parent = parent
+        return c
+    end
+
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    -- Wait for PlayerGui to be ready if it isn't yet
     while not pg do
         task.wait(0.1)
         pg = LocalPlayer:FindFirstChild("PlayerGui")
     end
+
     local sg = Instance.new("ScreenGui")
     sg.Name = "CapyggUI"
     sg.ResetOnSpawn = false
-    if pg then
-        sg.Parent = pg
-    else
-        -- Fallback to CoreGui if PlayerGui is unavailable (some executors)
-        sg.Parent = game:GetService("CoreGui")
-    end
-    sg.Enabled = true
     sg.IgnoreGuiInset = true
     sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    -- Test label to confirm UI is rendering
-    local testLabel = Instance.new("TextLabel")
-    testLabel.Size = UDim2.new(0, 200, 0, 30)
-    testLabel.Position = UDim2.new(0, 10, 0, 50)
-    testLabel.BackgroundTransparency = 0.5
-    testLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-    testLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    testLabel.Text = "Capy.gg UI Loaded"
-    testLabel.Parent = sg
-    
+    sg.Parent = pg or game:GetService("CoreGui")
+
     local win = Instance.new("Frame")
     win.Name = "Window"
-    win.ZIndex = 100
+    win.Size = UDim2.new(0, 520, 0, 560)
+    win.Position = UDim2.new(0.5, -260, 0.5, -280)
+    win.BackgroundColor3 = C.bg
+    win.BorderSizePixel = 0
     win.Active = true
-    win.Size = UDim2.new(0, 750, 0, 650)
-    win.Position = UDim2.new(0.5, -375, 0.5, -325)
-    win.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-    win.BorderSizePixel = 1
-    win.BorderColor3 = Color3.fromRGB(0, 150, 100)
+    win.ClipsDescendants = true
     win.Parent = sg
-    -- Rounded corners for the main window
-    local winCorner = Instance.new("UICorner")
-    winCorner.CornerRadius = UDim.new(0, 12)
-    winCorner.Parent = win
-    
-    -- Title
+    corner(win, 12)
+    stroke(win, C.border, 1)
+
+    -- Title bar
+    local titleBar = Instance.new("Frame")
+    titleBar.Name = "TitleBar"
+    titleBar.Size = UDim2.new(1, 0, 0, 44)
+    titleBar.BackgroundColor3 = C.surface
+    titleBar.BorderSizePixel = 0
+    titleBar.Parent = win
+
+    local accentLine = Instance.new("Frame")
+    accentLine.Size = UDim2.new(1, 0, 0, 2)
+    accentLine.Position = UDim2.new(0, 0, 1, -2)
+    accentLine.BackgroundColor3 = C.accent
+    accentLine.BorderSizePixel = 0
+    accentLine.Parent = titleBar
+
     local title = Instance.new("TextLabel")
-    title.Name = "Title"
-    title.Size = UDim2.new(1, 0, 0, 35)
-    title.BackgroundColor3 = Color3.fromRGB(0, 120, 80)
-    title.BorderSizePixel = 0
+    title.Size = UDim2.new(1, -16, 1, 0)
+    title.Position = UDim2.new(0, 16, 0, 0)
+    title.BackgroundTransparency = 1
     title.Font = Enum.Font.GothamBold
-    title.TextSize = 16
-    title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    title.Text = "  ✓ Capy.gg Admin"
-    title.Parent = win
-    local titleCorner = Instance.new("UICorner")
-    titleCorner.CornerRadius = UDim.new(0, 8)
-    titleCorner.Parent = title
-    
+    title.TextSize = 15
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextColor3 = C.text
+    title.Text = "Capy.gg Admin"
+    title.Parent = titleBar
+
+    local subtitle = Instance.new("TextLabel")
+    subtitle.Size = UDim2.new(1, -16, 0, 14)
+    subtitle.Position = UDim2.new(0, 16, 0, 26)
+    subtitle.BackgroundTransparency = 1
+    subtitle.Font = Enum.Font.Gotham
+    subtitle.TextSize = 11
+    subtitle.TextXAlignment = Enum.TextXAlignment.Left
+    subtitle.TextColor3 = C.muted
+    subtitle.Text = "Universal admin panel"
+    subtitle.Parent = titleBar
+
     -- Drag
-    local dragging = false
-    local dragStart, winStart = nil, nil
-    title.InputBegan:Connect(function(i, g)
+    local dragging, dragStart, winStart = false, nil, nil
+    titleBar.InputBegan:Connect(function(i, g)
         if g or i.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-        dragging = true dragStart = i.Position winStart = win.Position
+        dragging = true
+        dragStart = i.Position
+        winStart = win.Position
     end)
-    UserInputService.InputChanged:Connect(function(i, g)
+    UserInputService.InputChanged:Connect(function(i)
         if dragging and i.UserInputType == Enum.UserInputType.Mouse then
             win.Position = winStart + UDim2.new(0, i.Position.X - dragStart.X, 0, i.Position.Y - dragStart.Y)
         end
     end)
-    UserInputService.InputEnded:Connect(function(i, g) if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
-    
-    -- Resize
-    local resizing = false
-    local resizeStart, resizeSize = nil, nil
-    local resize = Instance.new("Frame")
-    resize.Size = UDim2.new(0, 20, 0, 20)
-    resize.Position = UDim2.new(1, -20, 1, -20)
-    resize.BackgroundColor3 = Color3.fromRGB(0, 150, 100)
-    resize.BorderSizePixel = 0
-    resize.Parent = win
-    resize.Cursor = "SizeNWSE"
-    local resizeCorner = Instance.new("UICorner")
-    resizeCorner.CornerRadius = UDim.new(0, 6)
-    resizeCorner.Parent = resize
-    
-    resize.InputBegan:Connect(function(i, g)
-        if g or i.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-        resizing = true resizeStart = i.Position resizeSize = win.Size
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
     end)
-    UserInputService.InputChanged:Connect(function(i, g)
-        if resizing and i.UserInputType == Enum.UserInputType.Mouse then
-            local d = i.Position - resizeStart
-            local nw = math.max(400, resizeSize.X.Offset + d.X)
-            local nh = math.max(300, resizeSize.Y.Offset + d.Y)
-            win.Size = UDim2.new(0, nw, 0, nh)
-        end
-    end)
-    UserInputService.InputEnded:Connect(function(i, g) if i.UserInputType == Enum.UserInputType.MouseButton1 then resizing = false end end)
-    
-    -- Tabs
+
+    -- Tab bar
     local tb = Instance.new("Frame")
-    tb.Size = UDim2.new(1, 0, 0, 30)
-    tb.Position = UDim2.new(0, 0, 0, 35)
-    tb.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    tb.Name = "TabBar"
+    tb.Size = UDim2.new(1, -24, 0, 36)
+    tb.Position = UDim2.new(0, 12, 0, 52)
+    tb.BackgroundColor3 = C.surface
     tb.BorderSizePixel = 0
     tb.Parent = win
-    local tbCorner = Instance.new("UICorner")
-    tbCorner.CornerRadius = UDim.new(0, 6)
-    tbCorner.Parent = tb
-    
+    corner(tb, 8)
+
+    local tabLayout = Instance.new("UIListLayout")
+    tabLayout.FillDirection = Enum.FillDirection.Horizontal
+    tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    tabLayout.Padding = UDim.new(0, 4)
+    tabLayout.Parent = tb
+
+    local tabPad = Instance.new("UIPadding")
+    tabPad.PaddingLeft = UDim.new(0, 4)
+    tabPad.PaddingRight = UDim.new(0, 4)
+    tabPad.PaddingTop = UDim.new(0, 4)
+    tabPad.PaddingBottom = UDim.new(0, 4)
+    tabPad.Parent = tb
+
     local tabs = {"Main", "Movement", "Combat", "Visuals", "Utility"}
     local tabContents = {}
-    
+    local tabButtons = {}
+
+    local function selectTab(name)
+        for tn, btn in pairs(tabButtons) do
+            local active = (tn == name)
+            btn.BackgroundColor3 = active and C.accent or C.surface2
+            btn.TextColor3 = active and C.text or C.muted
+            btn.Font = active and Enum.Font.GothamBold or Enum.Font.Gotham
+        end
+        for tn, panel in pairs(tabContents) do
+            panel.Visible = (tn == name)
+        end
+    end
+
     for i, tn in ipairs(tabs) do
         local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(0, 150, 1, 0)
-        btn.Position = UDim2.new(0, (i-1)*150, 0, 0)
-        btn.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+        btn.Name = tn .. "Tab"
+        btn.LayoutOrder = i
+        btn.Size = UDim2.new(1 / #tabs, -4, 1, 0)
+        btn.BackgroundColor3 = C.surface2
         btn.BorderSizePixel = 0
+        btn.AutoButtonColor = false
         btn.Font = Enum.Font.Gotham
-        btn.TextSize = 13
-        btn.TextColor3 = Color3.fromRGB(150, 150, 170)
+        btn.TextSize = 12
+        btn.TextColor3 = C.muted
         btn.Text = tn
         btn.Parent = tb
-        
-        btn.MouseButton1Click:Connect(function()
-            for _, b in ipairs(tb:GetChildren()) do
-                if b:IsA("TextButton") then
-                    b.BackgroundColor3 = (b == btn) and Color3.fromRGB(0, 120, 80) or Color3.fromRGB(35, 35, 45)
-                    b.TextColor3 = (b == btn) and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(150, 150, 170)
-                end
-            end
-            for n, c in pairs(tabContents) do c.Visible = (n == tn) end
-        end)
+        corner(btn, 6)
+        if tn == "Main" then btn.Name = "MainBtn" end
+        tabButtons[tn] = btn
+
+        btn.MouseButton1Click:Connect(function() selectTab(tn) end)
     end
-    
-    -- Content
-    local cont = Instance.new("ScrollingFrame")
-    cont.Size = UDim2.new(1, -8, 1, -73)
-    cont.Position = UDim2.new(0, 4, 0, 69)
-    cont.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-    cont.BorderSizePixel = 0
-    cont.ScrollBarThickness = 8
-    cont.CanvasSize = UDim2.new(0, 0, 0, 800)
-    cont.Parent = win
-    local contCorner = Instance.new("UICorner")
-    contCorner.CornerRadius = UDim.new(0, 6)
-    contCorner.Parent = cont
-    
-    local function addBtn(tab, txt, cb, header)
+
+    -- Content area
+    local content = Instance.new("Frame")
+    content.Name = "Content"
+    content.Size = UDim2.new(1, -24, 1, -108)
+    content.Position = UDim2.new(0, 12, 0, 96)
+    content.BackgroundTransparency = 1
+    content.BorderSizePixel = 0
+    content.ClipsDescendants = true
+    content.Parent = win
+
+    local function addSectionHeader(tab, txt)
+        local h = Instance.new("TextLabel")
+        h.Size = UDim2.new(1, 0, 0, 24)
+        h.BackgroundTransparency = 1
+        h.Font = Enum.Font.GothamBold
+        h.TextSize = 11
+        h.TextXAlignment = Enum.TextXAlignment.Left
+        h.TextColor3 = C.header
+        h.Text = string.upper(txt)
+        h.Parent = tab
+    end
+
+    local function addBtn(tab, txt, cb)
         local b = Instance.new("TextButton")
-        b.Size = UDim2.new(0.98, 0, 0, header and 28 or 32)
-        b.BackgroundColor3 = header and Color3.fromRGB(55, 55, 70) or Color3.fromRGB(60, 100, 85)
-        b.TextSize = header and 13 or 12
-        b.TextColor3 = header and Color3.fromRGB(100, 200, 150) or Color3.fromRGB(255, 255, 255)
-        b.Font = header and Enum.Font.GothamBold or Enum.Font.Gotham
+        b.Size = UDim2.new(1, 0, 0, 36)
+        b.BackgroundColor3 = C.surface2
         b.BorderSizePixel = 0
-        b.Text = txt
+        b.AutoButtonColor = false
+        b.Font = Enum.Font.Gotham
+        b.TextSize = 13
+        b.TextColor3 = C.text
+        b.TextXAlignment = Enum.TextXAlignment.Left
+        b.Text = "   " .. txt
         b.Parent = tab
-        if not header then
-            b.MouseButton1Click:Connect(function() pcall(cb) end)
-            b.MouseEnter:Connect(function() b.BackgroundColor3 = Color3.fromRGB(0, 150, 100) end)
-            b.MouseLeave:Connect(function() b.BackgroundColor3 = Color3.fromRGB(60, 100, 85) end)
-        end
-        local btnCorner = Instance.new("UICorner")
-        btnCorner.CornerRadius = UDim.new(0, 6)
-        btnCorner.Parent = b
+        corner(b, 8)
+        stroke(b, C.border, 1)
+
+        b.MouseButton1Click:Connect(function() pcall(cb) end)
+        b.MouseEnter:Connect(function() b.BackgroundColor3 = C.accentH end)
+        b.MouseLeave:Connect(function() b.BackgroundColor3 = C.surface2 end)
     end
-    
+
     for _, tn in ipairs(tabs) do
-        local tc = Instance.new("ScrollingFrame")
-        tc.Size = UDim2.new(1, 0, 1, 0)
-        tc.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-        tc.BorderSizePixel = 0
-        tc.ScrollBarThickness = 6
-        tc.CanvasSize = UDim2.new(0, 0, 0, 800)
-        tc.Visible = (tn == "Main")
-        tc.Parent = cont
-        
-        local l = Instance.new("UIListLayout")
-        l.Padding = UDim.new(0, 6)
-        l.Parent = tc
-        
-        tabContents[tn] = tc
+        local panel = Instance.new("ScrollingFrame")
+        panel.Name = tn .. "Panel"
+        panel.Size = UDim2.new(1, 0, 1, 0)
+        panel.BackgroundTransparency = 1
+        panel.BorderSizePixel = 0
+        panel.ScrollBarThickness = 4
+        panel.ScrollBarImageColor3 = C.accent
+        panel.CanvasSize = UDim2.new(0, 0, 0, 0)
+        panel.Visible = (tn == "Main")
+        panel.Parent = content
+
+        local pad = Instance.new("UIPadding")
+        pad.PaddingTop = UDim.new(0, 4)
+        pad.PaddingBottom = UDim.new(0, 8)
+        pad.PaddingLeft = UDim.new(0, 2)
+        pad.PaddingRight = UDim.new(0, 6)
+        pad.Parent = panel
+
+        local list = Instance.new("UIListLayout")
+        list.Padding = UDim.new(0, 8)
+        list.SortOrder = Enum.SortOrder.LayoutOrder
+        list.Parent = panel
+        list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            panel.CanvasSize = UDim2.new(0, 0, 0, list.AbsoluteContentSize.Y + 16)
+        end)
+
+        tabContents[tn] = panel
     end
-    
-    -- Buttons
-    addBtn(tabContents["Main"], "⚙️ GENERAL", nil, true)
-    addBtn(tabContents["Main"], "➕ Join Discord", function()
+
+    -- Main
+    addSectionHeader(tabContents["Main"], "General")
+    addBtn(tabContents["Main"], "Join Discord", function()
         pcall(function() setclipboard(DISCORD_INVITE) end)
         pcall(function()
             local guiService = game:GetService("GuiService")
@@ -450,8 +557,8 @@ local function buildUI()
         end)
         notify("Capy.gg", "Discord link opened / copied!", 3)
     end)
-    addBtn(tabContents["Main"], "🎯 Load Infinite Yield", loadInfiniteYield)
-    addBtn(tabContents["Main"], "🛠️ Open Infinite Yield UI", function()
+    addBtn(tabContents["Main"], "Load Infinite Yield", loadInfiniteYield)
+    addBtn(tabContents["Main"], "Open Infinite Yield UI", function()
         pcall(function()
             if typeof(_G.IY) == "table" and typeof(_G.IY.UI) == "function" then
                 _G.IY.UI()
@@ -460,50 +567,75 @@ local function buildUI()
             end
         end)
     end)
-    
-    addBtn(tabContents["Movement"], "🚀 MOVEMENT", nil, true)
-    addBtn(tabContents["Movement"], "Enable Fly", function() enableFly(true) notify("Movement", "Fly ON", 2) end)
-    addBtn(tabContents["Movement"], "Disable Fly", function() enableFly(false) notify("Movement", "Fly OFF", 2) end)
-    addBtn(tabContents["Movement"], "Enable NoClip", function() noclipEnabled = true runNoClip() notify("Movement", "NoClip ON", 2) end)
-    addBtn(tabContents["Movement"], "Disable NoClip", function() noclipEnabled = false notify("Movement", "NoClip OFF", 2) end)
-    addBtn(tabContents["Movement"], "Infinite Jump ON", function() infiniteJump(true) notify("Movement", "IJ ON", 2) end)
-    addBtn(tabContents["Movement"], "Infinite Jump OFF", function() infiniteJump(false) notify("Movement", "IJ OFF", 2) end)
-    
-    addBtn(tabContents["Combat"], "⚔️ COMBAT", nil, true)
+
+    -- Movement
+    addSectionHeader(tabContents["Movement"], "Movement")
+    addBtn(tabContents["Movement"], "Enable Fly", function() enableFly(true); notify("Movement", "Fly ON", 2) end)
+    addBtn(tabContents["Movement"], "Disable Fly", function() enableFly(false); notify("Movement", "Fly OFF", 2) end)
+    addBtn(tabContents["Movement"], "Enable NoClip", function() noclipEnabled = true; runNoClip(); notify("Movement", "NoClip ON", 2) end)
+    addBtn(tabContents["Movement"], "Disable NoClip", function() noclipEnabled = false; disableNoClip(); notify("Movement", "NoClip OFF", 2) end)
+    addBtn(tabContents["Movement"], "Infinite Jump ON", function() infiniteJump(true); notify("Movement", "IJ ON", 2) end)
+    addBtn(tabContents["Movement"], "Infinite Jump OFF", function() infiniteJump(false); notify("Movement", "IJ OFF", 2) end)
+
+    -- Combat
+    addSectionHeader(tabContents["Combat"], "Combat")
     addBtn(tabContents["Combat"], "Kill All Humanoids", killAllHumanoids)
     addBtn(tabContents["Combat"], "Kill Target", killTarget)
-    addBtn(tabContents["Combat"], "Teleport To Closest", function() local t = getClosestPlayer() if t then teleportToPlayer(t.Name) else notify("Teleport", "No players", 3) end end)
-    
-    addBtn(tabContents["Visuals"], "👁️ VISUALS", nil, true)
-    addBtn(tabContents["Visuals"], "ESP ON", function() refreshEsp(true) notify("Visuals", "ESP ON", 2) end)
-    addBtn(tabContents["Visuals"], "ESP OFF", function() refreshEsp(false) notify("Visuals", "ESP OFF", 2) end)
-    addBtn(tabContents["Visuals"], "Full Bright ON", function() setFullBright(true) notify("Visuals", "FB ON", 2) end)
-    addBtn(tabContents["Visuals"], "Full Bright OFF", function() setFullBright(false) notify("Visuals", "FB OFF", 2) end)
-    addBtn(tabContents["Visuals"], "Chams ON", function() toggleChams(true) notify("Visuals", "Chams ON", 2) end)
-    addBtn(tabContents["Visuals"], "Chams OFF", function() toggleChams(false) notify("Visuals", "Chams OFF", 2) end)
-    addBtn(tabContents["Visuals"], "Cleanup Visuals", cleanupVisuals)
-    
-    addBtn(tabContents["Utility"], "🔧 UTILITY", nil, true)
-    addBtn(tabContents["Utility"], "Anti-AFK ON", function() antiAfk(true) notify("Utility", "AAF ON", 2) end)
-    addBtn(tabContents["Utility"], "Anti-AFK OFF", function() antiAfk(false) notify("Utility", "AAF OFF", 2) end)
-    addBtn(tabContents["Utility"], "Server Hop", serverHop)
-    
-    local mb = tb:FindFirstChild("MainBtn") or tb:GetChildren()[1]
-    if mb then mb.BackgroundColor3 = Color3.fromRGB(0, 120, 80) mb.TextColor3 = Color3.fromRGB(255, 255, 255) end
-    
-    -- Debug button to verify UI elements are visible
-    local debugBtn = Instance.new("TextButton")
-    debugBtn.Size = UDim2.new(0, 120, 0, 30)
-    debugBtn.Position = UDim2.new(0, 10, 0, 10)
-    debugBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-    debugBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    debugBtn.Text = "Debug"
-    debugBtn.BorderSizePixel = 0
-    debugBtn.Parent = win
-    debugBtn.MouseButton1Click:Connect(function()
-        notify("Debug", "Button works!", 2)
+    addBtn(tabContents["Combat"], "Teleport To Closest", function()
+        local t = getClosestPlayer()
+        if t then teleportToPlayer(t.Name) else notify("Teleport", "No players", 3) end
     end)
-    win.Visible = true
+
+    -- Visuals
+    addSectionHeader(tabContents["Visuals"], "Visuals")
+    addBtn(tabContents["Visuals"], "ESP ON", function() refreshEsp(true); notify("Visuals", "ESP ON", 2) end)
+    addBtn(tabContents["Visuals"], "ESP OFF", function() refreshEsp(false); notify("Visuals", "ESP OFF", 2) end)
+    addBtn(tabContents["Visuals"], "Full Bright ON", function() setFullBright(true); notify("Visuals", "FB ON", 2) end)
+    addBtn(tabContents["Visuals"], "Full Bright OFF", function() setFullBright(false); notify("Visuals", "FB OFF", 2) end)
+    addBtn(tabContents["Visuals"], "Chams ON", function() toggleChams(true); notify("Visuals", "Chams ON", 2) end)
+    addBtn(tabContents["Visuals"], "Chams OFF", function() toggleChams(false); notify("Visuals", "Chams OFF", 2) end)
+    addBtn(tabContents["Visuals"], "Cleanup Visuals", cleanupVisuals)
+
+    -- Utility
+    addSectionHeader(tabContents["Utility"], "Utility")
+    addBtn(tabContents["Utility"], "Anti-AFK ON", function() antiAfk(true); notify("Utility", "AAF ON", 2) end)
+    addBtn(tabContents["Utility"], "Anti-AFK OFF", function() antiAfk(false); notify("Utility", "AAF OFF", 2) end)
+    addBtn(tabContents["Utility"], "Server Hop", serverHop)
+
+    selectTab("Main")
+
+    -- Resize handle
+    local resize = Instance.new("TextButton")
+    resize.Name = "Resize"
+    resize.Size = UDim2.new(0, 14, 0, 14)
+    resize.Position = UDim2.new(1, -18, 1, -18)
+    resize.BackgroundTransparency = 1
+    resize.Text = "◢"
+    resize.TextColor3 = C.muted
+    resize.TextSize = 12
+    resize.Font = Enum.Font.Gotham
+    resize.AutoButtonColor = false
+    resize.Parent = win
+
+    local resizing, resizeStart, resizeSize = false, nil, nil
+    resize.InputBegan:Connect(function(i, g)
+        if g or i.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+        resizing = true
+        resizeStart = i.Position
+        resizeSize = win.Size
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if resizing and i.UserInputType == Enum.UserInputType.Mouse then
+            local d = i.Position - resizeStart
+            local nw = math.max(380, resizeSize.X.Offset + d.X)
+            local nh = math.max(320, resizeSize.Y.Offset + d.Y)
+            win.Size = UDim2.new(0, nw, 0, nh)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then resizing = false end
+    end)
+
     return win
 end
 
@@ -518,8 +650,20 @@ else
     notify("Capy.gg", "UI failed", 5)
 end
 
-if RunService then pcall(function() RunService.Heartbeat:Connect(function() if noclipEnabled then runNoClip() end updateFly() end) end) end
-if LocalPlayer then pcall(function() LocalPlayer.CharacterAdded:Connect(function(c) pcall(function() if noclipEnabled then runNoClip() end if flyEnabled then enableFly(true) end end) end) end) end
+if RunService then pcall(function() RunService.Heartbeat:Connect(function() if noclipEnabled then runNoClip() end; updateFly() end) end) end
+if LocalPlayer then pcall(function() LocalPlayer.CharacterAdded:Connect(function()
+    task.defer(function()
+        if noclipEnabled then runNoClip() end
+        if flyEnabled then enableFly(true) end
+    end)
+end) end) end
+if Players then pcall(function()
+    for _, p in ipairs(Players:GetPlayers()) do
+        p.CharacterAdded:Connect(function()
+            if espEnabled then attachEspToPlayer(p) end
+        end)
+    end
+end) end
 
 print("[CAPY.GG] ✓ Universal Admin loaded successfully.")
 debugLog("Ready!")

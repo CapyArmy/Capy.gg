@@ -1,17 +1,22 @@
---[[
-    Capy.gg Universal Admin
-    Clean tabbed UI with drag & resize (Xeno-compatible)
+--[[ 
+    Capy.gg Universal Admin v2.0
+    Premium tabbed UI with left-sidebar, drag & smooth animations.
+    Fully optimized for standard Roblox executors.
 ]]
+
+-- Clear any previous session elements to avoid multiple loops fighting
+if typeof(_G.CapyCleanUp) == "function" then
+    pcall(_G.CapyCleanUp)
+end
 
 -- Simplified logger that only uses standard print to avoid opening executor consoles
 local function debugLog(msg)
     if type(print) == "function" then
         pcall(function() print("[CAPY.GG] " .. tostring(msg)) end)
     end
-    -- rconsoleprint omitted intentionally to prevent console pop‑up in executors
 end
 
-debugLog("Script loading...")
+debugLog("Loading Universal Admin v2.0...")
 
 local MAX_WAITS = 20
 local wait_count = 0
@@ -31,11 +36,11 @@ local UserInputService = safeGetService("UserInputService")
 local Lighting = safeGetService("Lighting")
 local TeleportService = safeGetService("TeleportService")
 local Workspace = safeGetService("Workspace")
+local TweenService = safeGetService("TweenService")
 
 -- Ensure we have a valid LocalPlayer before proceeding
 local LocalPlayer = Players and Players.LocalPlayer or nil
 if not LocalPlayer and Players then
-    -- Wait until the LocalPlayer instance appears (no timeout to guarantee UI creation)
     while not LocalPlayer do
         task.wait(0.1)
         LocalPlayer = Players.LocalPlayer
@@ -43,20 +48,33 @@ if not LocalPlayer and Players then
 end
 
 if not Players or not LocalPlayer then
-    debugLog("WARNING: Cannot load LocalPlayer, continuing anyway...")
+    debugLog("FATAL: Cannot load LocalPlayer.")
+    return
 end
 
-local espMap, connections, noclipEnabled, flyEnabled, flySpeed, flyBody = {}, {}, false, false, 100, nil
+-- State variables
+local espMap = {}
+local connections = {}
+local noclipEnabled = false
+local flyEnabled = false
+local flySpeed = 100
+local flyBody = nil
 local espEnabled = false
-local espPlayerRemovingConn, espPlayerAddedConn
+local chamsEnabled = false
+local walkspeedEnabled = false
+local targetWalkspeed = 16
+local jumppowerEnabled = false
+local targetJumppower = 50
 local originalLighting = {}
+local toggleKey = Enum.KeyCode.RightShift
+local menuOpen = true
+
 local DISCORD_INVITE = "https://discord.gg/XgTmqNRP4K"
 
-local function clamp(v, mi, ma) return (v < mi and mi) or (v > ma and ma) or v end
+-- Utility Helper Functions
 local function getCharacter(p) return p and p.Character end
 local function getHumanoid(p) return getCharacter(p) and getCharacter(p):FindFirstChildOfClass("Humanoid") end
 local function getRootPart(p) return getCharacter(p) and getCharacter(p):FindFirstChild("HumanoidRootPart") end
-local function notify(t,c,d) debugLog("["..t.."] "..c); print("["..t.."] "..c) end
 
 local function safeHttpGet(url)
     if type(game.HttpGet) == "function" then
@@ -78,13 +96,156 @@ local function safeHttpGet(url)
     return nil
 end
 
-local function safeSetClipboard(t) return pcall(function() if type(setclipboard) == "function" then setclipboard(t) end end) and true or false end
+-- Theme colors configuration
+local C = {
+    bg       = Color3.fromRGB(15, 15, 20),
+    sidebar  = Color3.fromRGB(22, 22, 30),
+    surface  = Color3.fromRGB(28, 28, 38),
+    surface2 = Color3.fromRGB(34, 34, 46),
+    accent   = Color3.fromRGB(16, 185, 129), -- Emerald
+    accentH  = Color3.fromRGB(5, 150, 105),  -- Emerald Hover
+    text     = Color3.fromRGB(240, 240, 245),
+    muted    = Color3.fromRGB(150, 150, 165),
+    border   = Color3.fromRGB(45, 45, 60),
+    header   = Color3.fromRGB(110, 120, 135),
+}
 
+-- Notification system
+local function getGuiParent()
+    local ok, coreGui = pcall(function() return game:GetService("CoreGui") end)
+    if ok and coreGui then
+        local test = pcall(function()
+            local f = Instance.new("Frame")
+            f.Parent = coreGui
+            f:Destroy()
+        end)
+        if test then return coreGui end
+    end
+    return LocalPlayer:FindFirstChild("PlayerGui")
+end
+
+local function createNotificationHolder()
+    local holderName = "CapyNotifications"
+    local parent = getGuiParent()
+    local actualParent = parent:FindFirstChild(holderName)
+    
+    if actualParent then return actualParent:FindFirstChild("Container") end
+    
+    local sg = Instance.new("ScreenGui")
+    sg.Name = holderName
+    sg.ResetOnSpawn = false
+    sg.IgnoreGuiInset = true
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    sg.Parent = parent
+    
+    local container = Instance.new("Frame")
+    container.Name = "Container"
+    container.Size = UDim2.new(0, 280, 1, -40)
+    container.Position = UDim2.new(1, -290, 0, 20)
+    container.BackgroundTransparency = 1
+    container.Parent = sg
+    
+    local list = Instance.new("UIListLayout")
+    list.FillDirection = Enum.FillDirection.Vertical
+    list.VerticalAlignment = Enum.VerticalAlignment.Bottom
+    list.HorizontalAlignment = Enum.HorizontalAlignment.Right
+    list.SortOrder = Enum.SortOrder.LayoutOrder
+    list.Padding = UDim.new(0, 10)
+    list.Parent = container
+    
+    return container
+end
+
+local function notify(title, text, duration)
+    duration = duration or 4
+    local container = createNotificationHolder()
+    if not container then return end
+    
+    local toast = Instance.new("Frame")
+    toast.Size = UDim2.new(1, 0, 0, 60)
+    toast.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+    toast.BackgroundTransparency = 0.1
+    toast.BorderSizePixel = 0
+    toast.Parent = container
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = toast
+    
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = C.border
+    stroke.Thickness = 1
+    stroke.Parent = toast
+    
+    local accent = Instance.new("Frame")
+    accent.Size = UDim2.new(0, 4, 1, 0)
+    accent.BackgroundColor3 = C.accent
+    accent.BorderSizePixel = 0
+    accent.Parent = toast
+    
+    local accentCorner = Instance.new("UICorner")
+    accentCorner.CornerRadius = UDim.new(0, 8)
+    accentCorner.Parent = accent
+    
+    local accentMask = Instance.new("Frame")
+    accentMask.Size = UDim2.new(0, 4, 1, 0)
+    accentMask.Position = UDim2.new(0, 2, 0, 0)
+    accentMask.BackgroundColor3 = C.accent
+    accentMask.BorderSizePixel = 0
+    accentMask.Parent = accent
+    
+    local titleLbl = Instance.new("TextLabel")
+    titleLbl.Size = UDim2.new(1, -20, 0, 20)
+    titleLbl.Position = UDim2.new(0, 12, 0, 8)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Font = Enum.Font.GothamBold
+    titleLbl.TextSize = 12
+    titleLbl.TextColor3 = C.accent
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    titleLbl.Text = title
+    titleLbl.Parent = toast
+    
+    local textLbl = Instance.new("TextLabel")
+    textLbl.Size = UDim2.new(1, -20, 1, -30)
+    textLbl.Position = UDim2.new(0, 12, 0, 26)
+    textLbl.BackgroundTransparency = 1
+    textLbl.Font = Enum.Font.Gotham
+    textLbl.TextSize = 11
+    textLbl.TextColor3 = Color3.fromRGB(220, 220, 225)
+    textLbl.TextXAlignment = Enum.TextXAlignment.Left
+    textLbl.TextYAlignment = Enum.TextYAlignment.Top
+    textLbl.TextWrapped = true
+    textLbl.Text = text
+    textLbl.Parent = toast
+    
+    -- Slide in animation from right
+    toast.Position = UDim2.new(1, 300, 0, 0)
+    TweenService:Create(toast, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position = UDim2.new(0, 0, 0, 0)}):Play()
+    
+    task.delay(duration, function()
+        if toast and toast.Parent then
+            local slideOut = TweenService:Create(toast, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Position = UDim2.new(1, 300, 0, 0)})
+            slideOut:Play()
+            slideOut.Completed:Connect(function()
+                if toast then toast:Destroy() end
+            end)
+        end
+    end)
+end
+
+-- Lighting Control
 local function setFullBright(e)
     if not Lighting then return end
     if e then
-        originalLighting.Brightness, originalLighting.Ambient, originalLighting.OutdoorAmbient, originalLighting.FogEnd = Lighting.Brightness, Lighting.Ambient, Lighting.OutdoorAmbient, Lighting.FogEnd
-        Lighting.Brightness, Lighting.Ambient, Lighting.OutdoorAmbient, Lighting.FogEnd = 3, Color3.fromRGB(200, 200, 200), Color3.fromRGB(200, 200, 200), 100000
+        originalLighting.Brightness = Lighting.Brightness
+        originalLighting.Ambient = Lighting.Ambient
+        originalLighting.OutdoorAmbient = Lighting.OutdoorAmbient
+        originalLighting.FogEnd = Lighting.FogEnd
+        
+        Lighting.Brightness = 3
+        Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+        Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+        Lighting.FogEnd = 9e9
     else
         Lighting.Brightness = originalLighting.Brightness or 1
         Lighting.Ambient = originalLighting.Ambient or Color3.fromRGB(128, 128, 128)
@@ -93,79 +254,143 @@ local function setFullBright(e)
     end
 end
 
+-- ESP System
 local function attachEspToPlayer(p)
     if not p or p == LocalPlayer then return end
-    local head = p.Character and p.Character:FindFirstChild("Head")
-    if not head then return end
+    
+    -- Cleanup existing BillboardGui if any
     local existing = espMap[p]
     if existing then
-        if existing.Parent then existing:Destroy() end
+        pcall(function() existing:Destroy() end)
         espMap[p] = nil
     end
+    
+    local char = p.Character
+    local head = char and char:WaitForChild("Head", 5)
+    if not head then return end
+    
     local bb = Instance.new("BillboardGui")
-    bb.Name, bb.Adornee, bb.AlwaysOnTop, bb.Size = "ESP", head, true, UDim2.new(0, 140, 0, 40)
+    bb.Name = "CapyESP"
+    bb.Adornee = head
+    bb.AlwaysOnTop = true
+    bb.Size = UDim2.new(0, 180, 0, 44)
+    bb.StudsOffset = Vector3.new(0, 2.5, 0)
+    
     local lbl = Instance.new("TextLabel")
-    lbl.Size, lbl.BackgroundTransparency, lbl.Font, lbl.TextSize, lbl.TextColor3 = UDim2.new(1,0,1,0), 1, Enum.Font.GothamBold, 14, Color3.fromRGB(255,255,255)
-    lbl.TextStrokeTransparency, lbl.TextStrokeColor3, lbl.Text = 0, Color3.fromRGB(0,0,0), p.Name
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 12
+    lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    lbl.TextStrokeTransparency = 0.35
+    lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    lbl.Text = p.DisplayName or p.Name
     lbl.Parent = bb
+    
     bb.Parent = head
     espMap[p] = bb
 end
 
-local function refreshEsp(e)
-    if not Players then return end
+local function updateEsp()
+    local localRoot = getRootPart(LocalPlayer)
+    for p, bb in pairs(espMap) do
+        if bb and bb.Parent and p.Character then
+            local root = getRootPart(p)
+            local hum = getHumanoid(p)
+            if root and localRoot and hum then
+                local dist = math.round((root.Position - localRoot.Position).Magnitude)
+                local hp = math.round(hum.Health)
+                local maxHp = math.round(hum.MaxHealth)
+                local hpPct = maxHp > 0 and math.round((hp / maxHp) * 100) or 0
+                
+                local lbl = bb:FindFirstChildOfClass("TextLabel")
+                if lbl then
+                    lbl.Text = string.format("%s\n[%s studs] [%s%% HP]", p.DisplayName or p.Name, dist, hpPct)
+                    if hpPct > 50 then
+                        lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    elseif hpPct > 20 then
+                        lbl.TextColor3 = Color3.fromRGB(251, 191, 36) -- Warning Yellow
+                    else
+                        lbl.TextColor3 = Color3.fromRGB(239, 68, 68)   -- Danger Red
+                    end
+                end
+            end
+        else
+            espMap[p] = nil
+        end
+    end
+end
+
+local function toggleEsp(e)
     espEnabled = e
     if e then
         for _, p in ipairs(Players:GetPlayers()) do
             attachEspToPlayer(p)
         end
-        if espPlayerRemovingConn then espPlayerRemovingConn:Disconnect() end
-        espPlayerRemovingConn = Players.PlayerRemoving:Connect(function(p)
-            local bb = espMap[p]
-            if bb then
-                if bb.Parent then bb:Destroy() end
-                espMap[p] = nil
-            end
-        end)
-        if espPlayerAddedConn then espPlayerAddedConn:Disconnect() end
-        espPlayerAddedConn = Players.PlayerAdded:Connect(function(p)
-            attachEspToPlayer(p)
-            p.CharacterAdded:Connect(function()
-                if espEnabled then attachEspToPlayer(p) end
-            end)
-        end)
     else
-        if espPlayerRemovingConn then
-            espPlayerRemovingConn:Disconnect()
-            espPlayerRemovingConn = nil
+        for p, bb in pairs(espMap) do
+            if bb and bb.Parent then pcall(function() bb:Destroy() end) end
         end
-        if espPlayerAddedConn then
-            espPlayerAddedConn:Disconnect()
-            espPlayerAddedConn = nil
-        end
-        for _, bb in pairs(espMap) do if bb and bb.Parent then bb:Destroy() end end
         espMap = {}
     end
 end
 
-local function runNoClip()
-    if not LocalPlayer or not LocalPlayer.Character then return end
-    for _, p in ipairs(LocalPlayer.Character:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
+-- Chams System (Highlight-based)
+local function applyCham(p)
+    if not p or p == LocalPlayer or not chamsEnabled then return end
+    local char = p.Character
+    if not char then return end
+    
+    local hl = char:FindFirstChild("CapyCham")
+    if not hl then
+        hl = Instance.new("Highlight")
+        hl.Name = "CapyCham"
+        hl.Parent = char
+    end
+    hl.FillColor = C.accent
+    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+    hl.FillTransparency = 0.55
+    hl.OutlineTransparency = 0.15
+    hl.Adornee = char
 end
 
-local function disableNoClip()
-    if not LocalPlayer or not LocalPlayer.Character then return end
-    for _, p in ipairs(LocalPlayer.Character:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = true end end
+local function removeCham(p)
+    local char = p and p.Character
+    if char then
+        local hl = char:FindFirstChild("CapyCham")
+        if hl then pcall(function() hl:Destroy() end) end
+    end
 end
 
+local function toggleChams(e)
+    chamsEnabled = e
+    if e then
+        for _, p in ipairs(Players:GetPlayers()) do
+            applyCham(p)
+        end
+    else
+        for _, p in ipairs(Players:GetPlayers()) do
+            removeCham(p)
+        end
+    end
+end
+
+local function cleanupVisuals()
+    toggleEsp(false)
+    toggleChams(false)
+    setFullBright(false)
+end
+
+-- Flight System
 local function enableFly(e)
     if not LocalPlayer then return end
     local r = getRootPart(LocalPlayer)
     flyEnabled = e
-    if flyBody then flyBody:Destroy(); flyBody = nil end
+    if flyBody then pcall(function() flyBody:Destroy() end); flyBody = nil end
     if not e or not r then return end
+    
     flyBody = Instance.new("BodyVelocity")
-    flyBody.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+    flyBody.MaxForce = Vector3.new(9e9, 9e9, 9e9)
     flyBody.Velocity = Vector3.new(0, 0, 0)
     flyBody.Parent = r
 end
@@ -174,6 +399,7 @@ local function updateFly()
     if not flyEnabled or not flyBody or not UserInputService then return end
     local camera = Workspace and Workspace.CurrentCamera
     if not camera then return end
+    
     local d = Vector3.new(0, 0, 0)
     if UserInputService:IsKeyDown(Enum.KeyCode.W) then d = d + camera.CFrame.LookVector end
     if UserInputService:IsKeyDown(Enum.KeyCode.S) then d = d - camera.CFrame.LookVector end
@@ -181,16 +407,22 @@ local function updateFly()
     if UserInputService:IsKeyDown(Enum.KeyCode.D) then d = d + camera.CFrame.RightVector end
     if UserInputService:IsKeyDown(Enum.KeyCode.Space) then d = d + Vector3.new(0, 1, 0) end
     if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then d = d - Vector3.new(0, 1, 0) end
+    
     flyBody.Velocity = (d.Magnitude > 0 and d.Unit * flySpeed) or Vector3.new(0, 0, 0)
 end
 
+-- Combat Commands
 local function killAllHumanoids()
     if not Workspace or not LocalPlayer then return end
     local char = LocalPlayer.Character
+    local count = 0
     for _, o in ipairs(Workspace:GetDescendants()) do
-        if o:IsA("Humanoid") and o.Parent ~= char then o.Health = 0 end
+        if o:IsA("Humanoid") and o.Parent ~= char then
+            pcall(function() o.Health = 0 end)
+            count = count + 1
+        end
     end
-    notify("Combat", "All humanoids killed.", 3)
+    notify("Combat", "Kill All executed. Targets hit: " .. tostring(count), 3)
 end
 
 local function killTarget()
@@ -198,59 +430,11 @@ local function killTarget()
     local m = LocalPlayer:GetMouse()
     local h = m.Target and m.Target.Parent and m.Target.Parent:FindFirstChildOfClass("Humanoid")
     if h and h.Health > 0 and m.Target.Parent ~= LocalPlayer.Character then
-        h.Health = 0
-        notify("Combat", "Target eliminated.", 2)
-    end
-end
-
-local function antiAfk(e)
-    if e then
-        if not LocalPlayer then return end
-        connections["AntiAfk"] = LocalPlayer.Idled:Connect(function()
-            local vu = game:GetService("VirtualUser")
-            vu:Button2Down(Vector2.new(0,0))
-            task.wait(1)
-            vu:Button2Up(Vector2.new(0,0))
-        end)
+        pcall(function() h.Health = 0 end)
+        notify("Combat", "Target " .. tostring(m.Target.Parent.Name) .. " eliminated.", 2)
     else
-        if connections["AntiAfk"] then connections["AntiAfk"]:Disconnect(); connections["AntiAfk"] = nil end
+        notify("Combat", "Hover cursor over a target to kill.", 3)
     end
-end
-
-local function serverHop()
-    if TeleportService and LocalPlayer then pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end) end
-end
-
-local function infiniteJump(e)
-    if e then
-        if not UserInputService or not LocalPlayer then return end
-        connections["InfiniteJump"] = UserInputService.JumpRequest:Connect(function()
-            local h = LocalPlayer and getHumanoid(LocalPlayer)
-            if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
-        end)
-    else
-        if connections["InfiniteJump"] then connections["InfiniteJump"]:Disconnect(); connections["InfiniteJump"] = nil end
-    end
-end
-
-local function loadInfiniteYield()
-    local src = safeHttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source")
-    if not src then
-        notify("Capy.gg", "Failed to fetch Infinite Yield.", 4)
-        return
-    end
-    local loader = loadstring or load
-    if type(loader) ~= "function" then
-        notify("Capy.gg", "Failed to load IY (no loader available).", 3)
-        return
-    end
-    local okCompile, compiled = pcall(function() return loader(src) end)
-    if not okCompile or type(compiled) ~= "function" then
-        notify("Capy.gg", "Failed to compile Infinite Yield.", 3)
-        return
-    end
-    local ok = pcall(compiled)
-    notify("Capy.gg", ok and "Infinite Yield loaded." or "Failed to load IY", 3)
 end
 
 local function getClosestPlayer()
@@ -273,85 +457,151 @@ end
 local function teleportToPlayer(n)
     if not Players or not LocalPlayer then return end
     local t = Players:FindFirstChild(n)
-    if not t then notify("Teleport", "Player not found", 4); return end
+    if not t then notify("Teleport", "Player not found", 3); return end
     local tr, lr = getRootPart(t), getRootPart(LocalPlayer)
-    if tr and lr then lr.CFrame = tr.CFrame + Vector3.new(0, 5, 0) end
+    if tr and lr then
+        lr.CFrame = tr.CFrame + Vector3.new(0, 5, 0)
+        notify("Teleport", "Teleported to " .. n, 2)
+    end
 end
 
-local function cleanupEsp()
-    refreshEsp(false)
+-- Utility Commands
+local function antiAfk(e)
+    if e then
+        if not LocalPlayer then return end
+        connections["AntiAfk"] = LocalPlayer.Idled:Connect(function()
+            local vu = game:GetService("VirtualUser")
+            vu:Button2Down(Vector2.new(0,0))
+            task.wait(1)
+            vu:Button2Up(Vector2.new(0,0))
+            notify("Anti-AFK", "Prevented disconnection (AFK).", 2)
+        end)
+        notify("Anti-AFK", "Enabled", 2)
+    else
+        if connections["AntiAfk"] then connections["AntiAfk"]:Disconnect(); connections["AntiAfk"] = nil end
+        notify("Anti-AFK", "Disabled", 2)
+    end
 end
 
-local function toggleChams(e)
-    if not Players then return end
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            local c = getCharacter(p)
-            if c then
-                for _, part in ipairs(c:GetDescendants()) do
-                    if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-                        part.Material = e and Enum.Material.Neon or Enum.Material.Plastic
-                        if e then part.Color = Color3.fromRGB(0, 255, 150) end
-                    end
-                end
-            end
+local function serverHop()
+    if TeleportService and LocalPlayer then 
+        notify("Server Hop", "Finding new server...", 3)
+        pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end) 
+    end
+end
+
+local function rejoinServer()
+    if TeleportService and LocalPlayer then
+        notify("Rejoin", "Reconnecting to server...", 3)
+        local ok = pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+        end)
+        if not ok then
+            pcall(function()
+                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+            end)
         end
     end
 end
 
-local function cleanupVisuals() cleanupEsp() toggleChams(false) setFullBright(false) end
+local function infiniteJump(e)
+    if e then
+        if not UserInputService or not LocalPlayer then return end
+        connections["InfiniteJump"] = UserInputService.JumpRequest:Connect(function()
+            local h = LocalPlayer and getHumanoid(LocalPlayer)
+            if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+        end)
+        notify("Movement", "Infinite Jump ON", 2)
+    else
+        if connections["InfiniteJump"] then connections["InfiniteJump"]:Disconnect(); connections["InfiniteJump"] = nil end
+        notify("Movement", "Infinite Jump OFF", 2)
+    end
+end
 
-debugLog("Building UI...")
+local function loadInfiniteYield()
+    local src = safeHttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source")
+    if not src then
+        notify("Capy.gg", "Failed to fetch Infinite Yield.", 4)
+        return
+    end
+    local loader = loadstring or load
+    if type(loader) ~= "function" then
+        notify("Capy.gg", "No loadstring capability available.", 3)
+        return
+    end
+    local okCompile, compiled = pcall(function() return loader(src) end)
+    if not okCompile or type(compiled) ~= "function" then
+        notify("Capy.gg", "Compilation failed.", 3)
+        return
+    end
+    local ok = pcall(compiled)
+    notify("Capy.gg", ok and "Infinite Yield loaded." or "Failed to run IY", 3)
+end
 
+-- Drag handling
+local function makeDraggable(frame, handle)
+    local dragStart, startPos
+    
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragStart = input.Position
+            startPos = frame.Position
+            
+            local dragConnection
+            dragConnection = UserInputService.InputChanged:Connect(function(changedInput)
+                if changedInput.UserInputType == Enum.UserInputType.MouseMovement or changedInput.UserInputType == Enum.UserInputType.Touch then
+                    local delta = changedInput.Position - dragStart
+                    frame.Position = UDim2.new(
+                        startPos.X.Scale, startPos.X.Offset + delta.X,
+                        startPos.Y.Scale, startPos.Y.Offset + delta.Y
+                    )
+                end
+            end)
+            
+            local dragEndedConnection
+            dragEndedConnection = UserInputService.InputEnded:Connect(function(endedInput)
+                if endedInput.UserInputType == Enum.UserInputType.MouseButton1 or endedInput.UserInputType == Enum.UserInputType.Touch then
+                    dragConnection:Disconnect()
+                    dragEndedConnection:Disconnect()
+                end
+            end)
+        end
+    end)
+end
+
+-- Helper GUI functions
+local function stroke(parent, color, thickness)
+    local s = Instance.new("UIStroke")
+    s.Color = color or C.border
+    s.Thickness = thickness or 1
+    s.Transparency = 0.35
+    s.Parent = parent
+    return s
+end
+
+local function corner(parent, radius)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, radius or 8)
+    c.Parent = parent
+    return c
+end
+
+-- Build the UI
 local function buildUI()
-    if not LocalPlayer then debugLog("LocalPlayer is nil"); return nil end
-    if not UserInputService then debugLog("UserInputService is nil"); return nil end
-
-    local C = {
-        bg       = Color3.fromRGB(18, 18, 24),
-        surface  = Color3.fromRGB(26, 26, 34),
-        surface2 = Color3.fromRGB(34, 34, 44),
-        accent   = Color3.fromRGB(16, 185, 129),
-        accentH  = Color3.fromRGB(5, 150, 105),
-        text     = Color3.fromRGB(241, 245, 249),
-        muted    = Color3.fromRGB(148, 163, 184),
-        border   = Color3.fromRGB(51, 65, 85),
-        header   = Color3.fromRGB(100, 116, 139),
-    }
-
-    local function stroke(parent, color, thickness)
-        local s = Instance.new("UIStroke")
-        s.Color = color or C.border
-        s.Thickness = thickness or 1
-        s.Transparency = 0.35
-        s.Parent = parent
-        return s
-    end
-
-    local function corner(parent, radius)
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, radius or 8)
-        c.Parent = parent
-        return c
-    end
-
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    while not pg do
-        task.wait(0.1)
-        pg = LocalPlayer:FindFirstChild("PlayerGui")
-    end
-
+    local parent = getGuiParent()
+    if not parent then return nil end
+    
     local sg = Instance.new("ScreenGui")
     sg.Name = "CapyggUI"
     sg.ResetOnSpawn = false
     sg.IgnoreGuiInset = true
     sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    sg.Parent = pg or game:GetService("CoreGui")
-
+    sg.Parent = parent
+    
     local win = Instance.new("Frame")
     win.Name = "Window"
-    win.Size = UDim2.new(0, 520, 0, 560)
-    win.Position = UDim2.new(0.5, -260, 0.5, -280)
+    win.Size = UDim2.new(0, 560, 0, 380)
+    win.Position = UDim2.new(0.5, -280, 0.5, -190)
     win.BackgroundColor3 = C.bg
     win.BorderSizePixel = 0
     win.Active = true
@@ -359,163 +609,139 @@ local function buildUI()
     win.Parent = sg
     corner(win, 12)
     stroke(win, C.border, 1)
-
-    -- Title bar
-    local titleBar = Instance.new("Frame")
-    titleBar.Name = "TitleBar"
-    titleBar.Size = UDim2.new(1, 0, 0, 44)
-    titleBar.BackgroundColor3 = C.surface
-    titleBar.BorderSizePixel = 0
-    titleBar.Parent = win
-
-    local accentLine = Instance.new("Frame")
-    accentLine.Size = UDim2.new(1, 0, 0, 2)
-    accentLine.Position = UDim2.new(0, 0, 1, -2)
-    accentLine.BackgroundColor3 = C.accent
-    accentLine.BorderSizePixel = 0
-    accentLine.Parent = titleBar
-
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, -16, 1, 0)
-    title.Position = UDim2.new(0, 16, 0, 0)
-    title.BackgroundTransparency = 1
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 15
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.TextColor3 = C.text
-    title.Text = "Capy.gg Admin"
-    title.Parent = titleBar
-
+    
+    local uiScale = Instance.new("UIScale")
+    uiScale.Scale = 1
+    uiScale.Parent = win
+    
+    -- Left Sidebar
+    local sidebar = Instance.new("Frame")
+    sidebar.Name = "Sidebar"
+    sidebar.Size = UDim2.new(0, 140, 1, 0)
+    sidebar.BackgroundColor3 = C.sidebar
+    sidebar.BorderSizePixel = 0
+    sidebar.Parent = win
+    
+    -- Divider line on right of sidebar
+    local div = Instance.new("Frame")
+    div.Size = UDim2.new(0, 1, 1, 0)
+    div.Position = UDim2.new(1, -1, 0, 0)
+    div.BackgroundColor3 = C.border
+    div.BorderSizePixel = 0
+    div.Parent = sidebar
+    
+    -- Sidebar Title Info
+    local logo = Instance.new("TextLabel")
+    logo.Size = UDim2.new(1, 0, 0, 24)
+    logo.Position = UDim2.new(0, 0, 0, 16)
+    logo.BackgroundTransparency = 1
+    logo.Font = Enum.Font.GothamBold
+    logo.TextSize = 16
+    logo.TextColor3 = C.accent
+    logo.Text = "Capy.gg"
+    logo.Parent = sidebar
+    
     local subtitle = Instance.new("TextLabel")
-    subtitle.Size = UDim2.new(1, -16, 0, 14)
-    subtitle.Position = UDim2.new(0, 16, 0, 26)
+    subtitle.Size = UDim2.new(1, 0, 0, 14)
+    subtitle.Position = UDim2.new(0, 0, 0, 36)
     subtitle.BackgroundTransparency = 1
     subtitle.Font = Enum.Font.Gotham
-    subtitle.TextSize = 11
-    subtitle.TextXAlignment = Enum.TextXAlignment.Left
+    subtitle.TextSize = 10
     subtitle.TextColor3 = C.muted
-    subtitle.Text = "Universal admin panel"
-    subtitle.Parent = titleBar
-
-    -- Drag
-    local dragging, dragStart, winStart = false, nil, nil
-    titleBar.InputBegan:Connect(function(i, g)
-        if g or i.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-        dragging = true
-        dragStart = i.Position
-        winStart = win.Position
-    end)
-    UserInputService.InputChanged:Connect(function(i)
-        if dragging and i.UserInputType == Enum.UserInputType.Mouse then
-            win.Position = winStart + UDim2.new(0, i.Position.X - dragStart.X, 0, i.Position.Y - dragStart.Y)
-        end
-    end)
-    UserInputService.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
-    end)
-
-    -- Tab bar
-    local tb = Instance.new("Frame")
-    tb.Name = "TabBar"
-    tb.Size = UDim2.new(1, -24, 0, 36)
-    tb.Position = UDim2.new(0, 12, 0, 52)
-    tb.BackgroundColor3 = C.surface
-    tb.BorderSizePixel = 0
-    tb.Parent = win
-    corner(tb, 8)
-
+    subtitle.Text = "Universal Admin"
+    subtitle.Parent = sidebar
+    
+    -- Tab List Frame
+    local tabListFrame = Instance.new("Frame")
+    tabListFrame.Size = UDim2.new(1, -16, 1, -100)
+    tabListFrame.Position = UDim2.new(0, 8, 0, 68)
+    tabListFrame.BackgroundTransparency = 1
+    tabListFrame.Parent = sidebar
+    
     local tabLayout = Instance.new("UIListLayout")
-    tabLayout.FillDirection = Enum.FillDirection.Horizontal
+    tabLayout.Padding = UDim.new(0, 5)
     tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    tabLayout.Padding = UDim.new(0, 4)
-    tabLayout.Parent = tb
-
-    local tabPad = Instance.new("UIPadding")
-    tabPad.PaddingLeft = UDim.new(0, 4)
-    tabPad.PaddingRight = UDim.new(0, 4)
-    tabPad.PaddingTop = UDim.new(0, 4)
-    tabPad.PaddingBottom = UDim.new(0, 4)
-    tabPad.Parent = tb
-
-    local tabs = {"Main", "Movement", "Combat", "Visuals", "Utility"}
-    local tabContents = {}
+    tabLayout.Parent = tabListFrame
+    
+    -- Version Label
+    local verLabel = Instance.new("TextLabel")
+    verLabel.Size = UDim2.new(1, 0, 0, 20)
+    verLabel.Position = UDim2.new(0, 0, 1, -24)
+    verLabel.BackgroundTransparency = 1
+    verLabel.Font = Enum.Font.Gotham
+    verLabel.TextSize = 10
+    verLabel.TextColor3 = C.muted
+    verLabel.Text = "v2.0.0"
+    verLabel.Parent = sidebar
+    
+    -- Content Frame
+    local contentFrame = Instance.new("Frame")
+    contentFrame.Name = "ContentFrame"
+    contentFrame.Size = UDim2.new(1, -164, 1, -24)
+    contentFrame.Position = UDim2.new(0, 152, 0, 12)
+    contentFrame.BackgroundTransparency = 1
+    contentFrame.Parent = win
+    
+    -- UI Control Functions
+    makeDraggable(win, sidebar)
+    
     local tabButtons = {}
-
+    local tabContents = {}
+    
     local function selectTab(name)
         for tn, btn in pairs(tabButtons) do
             local active = (tn == name)
-            btn.BackgroundColor3 = active and C.accent or C.surface2
-            btn.TextColor3 = active and C.text or C.muted
-            btn.Font = active and Enum.Font.GothamBold or Enum.Font.Gotham
+            TweenService:Create(btn, TweenInfo.new(0.2), {
+                BackgroundColor3 = active and Color3.fromRGB(30, 30, 42) or Color3.fromRGB(18, 18, 26),
+                TextColor3 = active and C.text or C.muted
+            }):Play()
+            
+            local ind = btn:FindFirstChild("Indicator")
+            if ind then
+                TweenService:Create(ind, TweenInfo.new(0.15), {
+                    BackgroundTransparency = active and 0 or 1
+                }):Play()
+            end
         end
         for tn, panel in pairs(tabContents) do
             panel.Visible = (tn == name)
         end
     end
-
+    
+    local tabs = {"Main", "Movement", "Combat", "Visuals", "Utility"}
+    
     for i, tn in ipairs(tabs) do
+        -- Button
         local btn = Instance.new("TextButton")
         btn.Name = tn .. "Tab"
         btn.LayoutOrder = i
-        btn.Size = UDim2.new(1 / #tabs, -4, 1, 0)
-        btn.BackgroundColor3 = C.surface2
+        btn.Size = UDim2.new(1, 0, 0, 32)
+        btn.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
         btn.BorderSizePixel = 0
         btn.AutoButtonColor = false
-        btn.Font = Enum.Font.Gotham
+        btn.Font = Enum.Font.GothamMedium
         btn.TextSize = 12
         btn.TextColor3 = C.muted
-        btn.Text = tn
-        btn.Parent = tb
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.Text = "      " .. tn
+        btn.Parent = tabListFrame
         corner(btn, 6)
-        if tn == "Main" then btn.Name = "MainBtn" end
+        stroke(btn, C.border, 1)
+        
+        local ind = Instance.new("Frame")
+        ind.Name = "Indicator"
+        ind.Size = UDim2.new(0, 3, 0.6, 0)
+        ind.Position = UDim2.new(0, 4, 0.2, 0)
+        ind.BackgroundColor3 = C.accent
+        ind.BackgroundTransparency = 1
+        ind.BorderSizePixel = 0
+        ind.Parent = btn
+        corner(ind, 1.5)
+        
         tabButtons[tn] = btn
-
         btn.MouseButton1Click:Connect(function() selectTab(tn) end)
-    end
-
-    -- Content area
-    local content = Instance.new("Frame")
-    content.Name = "Content"
-    content.Size = UDim2.new(1, -24, 1, -108)
-    content.Position = UDim2.new(0, 12, 0, 96)
-    content.BackgroundTransparency = 1
-    content.BorderSizePixel = 0
-    content.ClipsDescendants = true
-    content.Parent = win
-
-    local function addSectionHeader(tab, txt)
-        local h = Instance.new("TextLabel")
-        h.Size = UDim2.new(1, 0, 0, 24)
-        h.BackgroundTransparency = 1
-        h.Font = Enum.Font.GothamBold
-        h.TextSize = 11
-        h.TextXAlignment = Enum.TextXAlignment.Left
-        h.TextColor3 = C.header
-        h.Text = string.upper(txt)
-        h.Parent = tab
-    end
-
-    local function addBtn(tab, txt, cb)
-        local b = Instance.new("TextButton")
-        b.Size = UDim2.new(1, 0, 0, 36)
-        b.BackgroundColor3 = C.surface2
-        b.BorderSizePixel = 0
-        b.AutoButtonColor = false
-        b.Font = Enum.Font.Gotham
-        b.TextSize = 13
-        b.TextColor3 = C.text
-        b.TextXAlignment = Enum.TextXAlignment.Left
-        b.Text = "   " .. txt
-        b.Parent = tab
-        corner(b, 8)
-        stroke(b, C.border, 1)
-
-        b.MouseButton1Click:Connect(function() pcall(cb) end)
-        b.MouseEnter:Connect(function() b.BackgroundColor3 = C.accentH end)
-        b.MouseLeave:Connect(function() b.BackgroundColor3 = C.surface2 end)
-    end
-
-    for _, tn in ipairs(tabs) do
+        
+        -- Panel
         local panel = Instance.new("ScrollingFrame")
         panel.Name = tn .. "Panel"
         panel.Size = UDim2.new(1, 0, 1, 0)
@@ -525,15 +751,15 @@ local function buildUI()
         panel.ScrollBarImageColor3 = C.accent
         panel.CanvasSize = UDim2.new(0, 0, 0, 0)
         panel.Visible = (tn == "Main")
-        panel.Parent = content
-
+        panel.Parent = contentFrame
+        
         local pad = Instance.new("UIPadding")
         pad.PaddingTop = UDim.new(0, 4)
         pad.PaddingBottom = UDim.new(0, 8)
         pad.PaddingLeft = UDim.new(0, 2)
-        pad.PaddingRight = UDim.new(0, 6)
+        pad.PaddingRight = UDim.new(0, 8)
         pad.Parent = panel
-
+        
         local list = Instance.new("UIListLayout")
         list.Padding = UDim.new(0, 8)
         list.SortOrder = Enum.SortOrder.LayoutOrder
@@ -541,24 +767,158 @@ local function buildUI()
         list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
             panel.CanvasSize = UDim2.new(0, 0, 0, list.AbsoluteContentSize.Y + 16)
         end)
-
+        
         tabContents[tn] = panel
     end
-
-    -- Main
-    addSectionHeader(tabContents["Main"], "General")
-    addBtn(tabContents["Main"], "Join Discord", function()
-        pcall(function() setclipboard(DISCORD_INVITE) end)
+    
+    -- Custom elements insertion API
+    local function addSectionHeader(tab, txt)
+        local h = Instance.new("TextLabel")
+        h.Size = UDim2.new(1, 0, 0, 20)
+        h.BackgroundTransparency = 1
+        h.Font = Enum.Font.GothamBold
+        h.TextSize = 10
+        h.TextXAlignment = Enum.TextXAlignment.Left
+        h.TextColor3 = C.header
+        h.Text = "  " .. string.upper(txt)
+        h.Parent = tabContents[tab]
+    end
+    
+    local function addButton(tab, txt, cb)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(1, 0, 0, 36)
+        b.BackgroundColor3 = C.surface
+        b.BorderSizePixel = 0
+        b.AutoButtonColor = false
+        b.Font = Enum.Font.GothamMedium
+        b.TextSize = 12
+        b.TextColor3 = C.text
+        b.Text = txt
+        b.Parent = tabContents[tab]
+        corner(b, 8)
+        stroke(b, C.border, 1)
+        
+        b.MouseButton1Click:Connect(function()
+            local oldC = b.BackgroundColor3
+            b.BackgroundColor3 = C.accent
+            task.wait(0.08)
+            b.BackgroundColor3 = oldC
+            pcall(cb)
+        end)
+        
+        b.MouseEnter:Connect(function()
+            TweenService:Create(b, TweenInfo.new(0.15), {BackgroundColor3 = C.accentH}):Play()
+        end)
+        b.MouseLeave:Connect(function()
+            TweenService:Create(b, TweenInfo.new(0.15), {BackgroundColor3 = C.surface}):Play()
+        end)
+    end
+    
+    local function addToggle(tab, txt, defaultVal, cb)
+        local f = Instance.new("Frame")
+        f.Size = UDim2.new(1, 0, 0, 38)
+        f.BackgroundColor3 = C.surface
+        f.BorderSizePixel = 0
+        f.Parent = tabContents[tab]
+        corner(f, 8)
+        stroke(f, C.border, 1)
+        
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, -60, 1, 0)
+        label.Position = UDim2.new(0, 12, 0, 0)
+        label.BackgroundTransparency = 1
+        label.Font = Enum.Font.GothamMedium
+        label.TextSize = 12
+        label.TextColor3 = C.text
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = txt
+        label.Parent = f
+        
+        local button = Instance.new("TextButton")
+        button.Size = UDim2.new(0, 36, 0, 18)
+        button.Position = UDim2.new(1, -48, 0.5, -9)
+        button.BackgroundColor3 = defaultVal and C.accent or C.bg
+        button.Text = ""
+        button.AutoButtonColor = false
+        button.Parent = f
+        corner(button, 9)
+        stroke(button, C.border, 1)
+        
+        local dot = Instance.new("Frame")
+        dot.Size = UDim2.new(0, 14, 0, 14)
+        dot.Position = defaultVal and UDim2.new(0, 20, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+        dot.BackgroundColor3 = C.text
+        dot.Parent = button
+        corner(dot, 7)
+        
+        local state = defaultVal
+        button.MouseButton1Click:Connect(function()
+            state = not state
+            local targetColor = state and C.accent or C.bg
+            local targetPos = state and UDim2.new(0, 20, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+            
+            TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = targetColor}):Play()
+            TweenService:Create(dot, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = targetPos}):Play()
+            
+            pcall(cb, state)
+        end)
+    end
+    
+    local function addTextBox(tab, txt, defaultVal, cb)
+        local f = Instance.new("Frame")
+        f.Size = UDim2.new(1, 0, 0, 38)
+        f.BackgroundColor3 = C.surface
+        f.BorderSizePixel = 0
+        f.Parent = tabContents[tab]
+        corner(f, 8)
+        stroke(f, C.border, 1)
+        
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, -100, 1, 0)
+        label.Position = UDim2.new(0, 12, 0, 0)
+        label.BackgroundTransparency = 1
+        label.Font = Enum.Font.GothamMedium
+        label.TextSize = 12
+        label.TextColor3 = C.text
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = txt
+        label.Parent = f
+        
+        local box = Instance.new("TextBox")
+        box.Size = UDim2.new(0, 80, 0, 24)
+        box.Position = UDim2.new(1, -92, 0.5, -12)
+        box.BackgroundColor3 = C.bg
+        box.BorderSizePixel = 0
+        box.Font = Enum.Font.Gotham
+        box.TextSize = 11
+        box.TextColor3 = C.text
+        box.Text = tostring(defaultVal)
+        box.ClipsDescendants = true
+        box.Parent = f
+        corner(box, 6)
+        stroke(box, C.border, 1)
+        
+        box.FocusLost:Connect(function(enter)
+            pcall(cb, box.Text)
+        end)
+    end
+    
+    -- Populate Tab Contents
+    
+    -- Main Tab
+    addSectionHeader("Main", "General")
+    addButton("Main", "Join Discord Server", function()
+        local ok = pcall(function() setclipboard(DISCORD_INVITE) end)
         pcall(function()
             local guiService = game:GetService("GuiService")
             if guiService and guiService.OpenBrowserWindow then
                 guiService:OpenBrowserWindow(DISCORD_INVITE)
             end
         end)
-        notify("Capy.gg", "Discord link opened / copied!", 3)
+        notify("Capy.gg", ok and "Copied Discord Invite Link!" or "Link: " .. DISCORD_INVITE, 3)
     end)
-    addBtn(tabContents["Main"], "Load Infinite Yield", loadInfiniteYield)
-    addBtn(tabContents["Main"], "Open Infinite Yield UI", function()
+    addButton("Main", "Load Infinite Yield", loadInfiniteYield)
+    addButton("Main", "Open Infinite Yield UI", function()
         pcall(function()
             if typeof(_G.IY) == "table" and typeof(_G.IY.UI) == "function" then
                 _G.IY.UI()
@@ -567,104 +927,230 @@ local function buildUI()
             end
         end)
     end)
-
-    -- Movement
-    addSectionHeader(tabContents["Movement"], "Movement")
-    addBtn(tabContents["Movement"], "Enable Fly", function() enableFly(true); notify("Movement", "Fly ON", 2) end)
-    addBtn(tabContents["Movement"], "Disable Fly", function() enableFly(false); notify("Movement", "Fly OFF", 2) end)
-    addBtn(tabContents["Movement"], "Enable NoClip", function() noclipEnabled = true; runNoClip(); notify("Movement", "NoClip ON", 2) end)
-    addBtn(tabContents["Movement"], "Disable NoClip", function() noclipEnabled = false; disableNoClip(); notify("Movement", "NoClip OFF", 2) end)
-    addBtn(tabContents["Movement"], "Infinite Jump ON", function() infiniteJump(true); notify("Movement", "IJ ON", 2) end)
-    addBtn(tabContents["Movement"], "Infinite Jump OFF", function() infiniteJump(false); notify("Movement", "IJ OFF", 2) end)
-
-    -- Combat
-    addSectionHeader(tabContents["Combat"], "Combat")
-    addBtn(tabContents["Combat"], "Kill All Humanoids", killAllHumanoids)
-    addBtn(tabContents["Combat"], "Kill Target", killTarget)
-    addBtn(tabContents["Combat"], "Teleport To Closest", function()
-        local t = getClosestPlayer()
-        if t then teleportToPlayer(t.Name) else notify("Teleport", "No players", 3) end
+    
+    -- Movement Tab
+    addSectionHeader("Movement", "Toggles")
+    addToggle("Movement", "Enable Fly", false, function(v)
+        enableFly(v)
+        notify("Movement", "Fly " .. (v and "Enabled" or "Disabled"), 2)
     end)
-
-    -- Visuals
-    addSectionHeader(tabContents["Visuals"], "Visuals")
-    addBtn(tabContents["Visuals"], "ESP ON", function() refreshEsp(true); notify("Visuals", "ESP ON", 2) end)
-    addBtn(tabContents["Visuals"], "ESP OFF", function() refreshEsp(false); notify("Visuals", "ESP OFF", 2) end)
-    addBtn(tabContents["Visuals"], "Full Bright ON", function() setFullBright(true); notify("Visuals", "FB ON", 2) end)
-    addBtn(tabContents["Visuals"], "Full Bright OFF", function() setFullBright(false); notify("Visuals", "FB OFF", 2) end)
-    addBtn(tabContents["Visuals"], "Chams ON", function() toggleChams(true); notify("Visuals", "Chams ON", 2) end)
-    addBtn(tabContents["Visuals"], "Chams OFF", function() toggleChams(false); notify("Visuals", "Chams OFF", 2) end)
-    addBtn(tabContents["Visuals"], "Cleanup Visuals", cleanupVisuals)
-
-    -- Utility
-    addSectionHeader(tabContents["Utility"], "Utility")
-    addBtn(tabContents["Utility"], "Anti-AFK ON", function() antiAfk(true); notify("Utility", "AAF ON", 2) end)
-    addBtn(tabContents["Utility"], "Anti-AFK OFF", function() antiAfk(false); notify("Utility", "AAF OFF", 2) end)
-    addBtn(tabContents["Utility"], "Server Hop", serverHop)
-
+    addToggle("Movement", "Enable NoClip", false, function(v)
+        noclipEnabled = v
+        if not v then pcall(function()
+            local char = LocalPlayer.Character
+            for _, p in ipairs(char:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = true end end
+        end) end
+        notify("Movement", "Noclip " .. (v and "Enabled" or "Disabled"), 2)
+    end)
+    addToggle("Movement", "Infinite Jump", false, function(v)
+        infiniteJump(v)
+    end)
+    addToggle("Movement", "Lock WalkSpeed", false, function(v)
+        walkspeedEnabled = v
+        notify("Movement", "WS Lock " .. (v and "ON" or "OFF"), 2)
+    end)
+    addToggle("Movement", "Lock JumpPower", false, function(v)
+        jumppowerEnabled = v
+        notify("Movement", "JP Lock " .. (v and "ON" or "OFF"), 2)
+    end)
+    
+    addSectionHeader("Movement", "Speed Settings")
+    addTextBox("Movement", "Fly Speed multiplier", flySpeed, function(t)
+        local n = tonumber(t)
+        if n then flySpeed = n; notify("Movement", "Fly Speed set to " .. n, 2) end
+    end)
+    addTextBox("Movement", "WalkSpeed value", targetWalkspeed, function(t)
+        local n = tonumber(t)
+        if n then targetWalkspeed = n; notify("Movement", "WS Target set to " .. n, 2) end
+    end)
+    addTextBox("Movement", "JumpPower value", targetJumppower, function(t)
+        local n = tonumber(t)
+        if n then targetJumppower = n; notify("Movement", "JP Target set to " .. n, 2) end
+    end)
+    
+    -- Combat Tab
+    addSectionHeader("Combat", "Utilities")
+    addButton("Combat", "Kill All Players (FE Local)", killAllHumanoids)
+    addButton("Combat", "Kill Target (Hover & Click)", killTarget)
+    addButton("Combat", "Teleport to Closest Player", function()
+        local c = getClosestPlayer()
+        if c then teleportToPlayer(c.Name) else notify("Combat", "No player found", 2) end
+    end)
+    
+    -- Visuals Tab
+    addSectionHeader("Visuals", "Toggles")
+    addToggle("Visuals", "ESP (Names, Dist, HP)", false, toggleEsp)
+    addToggle("Visuals", "Highlight Chams", false, toggleChams)
+    addToggle("Visuals", "Full Bright", false, setFullBright)
+    addSectionHeader("Visuals", "Reset")
+    addButton("Visuals", "Cleanup Visuals", function()
+        cleanupVisuals()
+        notify("Visuals", "All visuals cleaned up.", 2)
+    end)
+    
+    -- Utility Tab
+    addSectionHeader("Utility", "Administration")
+    addToggle("Utility", "Prevent Idle Disconnect (Anti-AFK)", false, antiAfk)
+    addButton("Utility", "Server Hop", serverHop)
+    addButton("Utility", "Rejoin Current Server", rejoinServer)
+    
     selectTab("Main")
-
-    -- Resize handle
-    local resize = Instance.new("TextButton")
-    resize.Name = "Resize"
-    resize.Size = UDim2.new(0, 14, 0, 14)
-    resize.Position = UDim2.new(1, -18, 1, -18)
-    resize.BackgroundTransparency = 1
-    resize.Text = "◢"
-    resize.TextColor3 = C.muted
-    resize.TextSize = 12
-    resize.Font = Enum.Font.Gotham
-    resize.AutoButtonColor = false
-    resize.Parent = win
-
-    local resizing, resizeStart, resizeSize = false, nil, nil
-    resize.InputBegan:Connect(function(i, g)
-        if g or i.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-        resizing = true
-        resizeStart = i.Position
-        resizeSize = win.Size
+    
+    -- Close button
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.new(0, 16, 0, 16)
+    closeBtn.Position = UDim2.new(1, -28, 0, 12)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(239, 68, 68)
+    closeBtn.Text = ""
+    closeBtn.Parent = win
+    corner(closeBtn, 8)
+    stroke(closeBtn, Color3.fromRGB(180, 50, 50), 1)
+    
+    closeBtn.MouseButton1Click:Connect(function()
+        _G.CapyCleanUp()
     end)
-    UserInputService.InputChanged:Connect(function(i)
-        if resizing and i.UserInputType == Enum.UserInputType.Mouse then
-            local d = i.Position - resizeStart
-            local nw = math.max(380, resizeSize.X.Offset + d.X)
-            local nh = math.max(320, resizeSize.Y.Offset + d.Y)
-            win.Size = UDim2.new(0, nw, 0, nh)
+    
+    -- Show/Hide handler
+    local function toggleMenu()
+        menuOpen = not menuOpen
+        if menuOpen then
+            win.Visible = true
+            TweenService:Create(uiScale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+        else
+            local t = TweenService:Create(uiScale, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Scale = 0})
+            t:Play()
+            t.Completed:Connect(function()
+                if not menuOpen then win.Visible = false end
+            end)
+        end
+    end
+    
+    connections["ToggleMenu"] = UserInputService.InputBegan:Connect(function(input, processed)
+        if not processed and input.KeyCode == toggleKey then
+            toggleMenu()
         end
     end)
-    UserInputService.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 then resizing = false end
-    end)
-
+    
     return win
 end
 
-local w = nil
-pcall(function() w = buildUI() end)
--- Confirm UI was created
-if w then
-    debugLog("Capy.gg UI successfully created")
-    notify("Capy.gg", "UI loaded", 3)
-else
-    debugLog("Capy.gg UI failed to create")
-    notify("Capy.gg", "UI failed", 5)
+-- Cleanup global registration
+_G.CapyCleanUp = function()
+    -- Disconnect all events
+    for name, conn in pairs(connections) do
+        if conn then pcall(function() conn:Disconnect() end) end
+    end
+    connections = {}
+    
+    -- Clear physics updates
+    noclipEnabled = false
+    flyEnabled = false
+    walkspeedEnabled = false
+    jumppowerEnabled = false
+    
+    -- Clean visuals
+    pcall(cleanupVisuals)
+    
+    -- Destroy flight instance
+    if flyBody then pcall(function() flyBody:Destroy() end); flyBody = nil end
+    
+    -- Destroy visual GUIs
+    local parent = getGuiParent()
+    local main = parent and parent:FindFirstChild("CapyggUI")
+    local notifs = parent and parent:FindFirstChild("CapyNotifications")
+    if main then pcall(function() main:Destroy() end) end
+    if notifs then pcall(function() notifs:Destroy() end) end
+    
+    debugLog("Universal Admin uninstalled successfully.")
 end
 
-if RunService then pcall(function() RunService.Heartbeat:Connect(function() if noclipEnabled then runNoClip() end; updateFly() end) end) end
-if LocalPlayer then pcall(function() LocalPlayer.CharacterAdded:Connect(function()
-    task.defer(function()
-        if noclipEnabled then runNoClip() end
-        if flyEnabled then enableFly(true) end
-    end)
-end) end) end
-if Players then pcall(function()
-    for _, p in ipairs(Players:GetPlayers()) do
-        p.CharacterAdded:Connect(function()
-            if espEnabled then attachEspToPlayer(p) end
-        end)
-    end
-end) end
+-- Initialize UI
+local loadedWindow = nil
+local success, err = pcall(function()
+    loadedWindow = buildUI()
+end)
 
-print("[CAPY.GG] ✓ Universal Admin loaded successfully.")
-debugLog("Ready!")
-notify("Capy.gg", "Universal Admin loaded. Drag to move, drag corner to resize.", 5)
+if success and loadedWindow then
+    debugLog("UI build successful.")
+    notify("Capy.gg Admin", "Universal Admin loaded! Press RightShift to hide/show.", 5)
+else
+    debugLog("UI build failed: " .. tostring(err))
+    notify("Capy.gg Admin", "UI generation failed.", 5)
+end
+
+-- Physics loop connections
+connections["Stepped"] = RunService.Stepped:Connect(function()
+    pcall(function()
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        
+        -- Noclip
+        if noclipEnabled and char then
+            for _, part in ipairs(char:GetChildren()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+        end
+        
+        -- Enforce WalkSpeed
+        if walkspeedEnabled and hum then
+            hum.WalkSpeed = targetWalkspeed
+        end
+        
+        -- Enforce JumpPower
+        if jumppowerEnabled and hum then
+            hum.JumpPower = targetJumppower
+            hum.UseJumpPower = true
+        end
+        
+        -- Flight
+        if flyEnabled and flyBody and root then
+            updateFly()
+        end
+    end)
+end)
+
+connections["Heartbeat"] = RunService.Heartbeat:Connect(function()
+    pcall(function()
+        if espEnabled then
+            updateEsp()
+        end
+    end)
+end)
+
+-- Character reload hooks
+connections["LocalCharAdded"] = LocalPlayer.CharacterAdded:Connect(function(char)
+    task.defer(function()
+        local root = char:WaitForChild("HumanoidRootPart", 5)
+        if root then
+            if flyEnabled then enableFly(true) end
+        end
+    end)
+end)
+
+local function onCharacterAdded(p, char)
+    task.defer(function()
+        if espEnabled then attachEspToPlayer(p) end
+        if chamsEnabled then applyCham(p) end
+    end)
+end
+
+local function onPlayerAdded(p)
+    p.CharacterAdded:Connect(function(char)
+        onCharacterAdded(p, char)
+    end)
+    if p.Character then
+        onCharacterAdded(p, p.Character)
+    end
+end
+
+connections["PlayerAdded"] = Players.PlayerAdded:Connect(onPlayerAdded)
+for _, p in ipairs(Players:GetPlayers()) do
+    onPlayerAdded(p)
+end
+
+connections["PlayerRemoving"] = Players.PlayerRemoving:Connect(function(p)
+    espMap[p] = nil
+end)
+
+print("[CAPY.GG] ✓ Universal Admin v2.0 successfully loaded.")

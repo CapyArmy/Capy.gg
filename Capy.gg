@@ -19,6 +19,54 @@ end
 
 debugLog("Loading Universal Admin v3.0...")
 
+-- Universal task library compatibility shim for all executors
+-- Falls back: task library -> wait/spawn/delay globals -> coroutines
+local task = (function()
+    local ok, t = pcall(function()
+        local base = _G.task
+        if type(base) ~= "table" then base = {} end
+        if type(base.wait) ~= "function" then
+            base.wait = (type(wait) == "function") and function(...) return wait(...) end or function() end
+        end
+        if type(base.spawn) ~= "function" then
+            if type(spawn) == "function" then
+                base.spawn = function(f, ...)
+                    if type(f) ~= "function" then return end
+                    local args = {...}
+                    spawn(function() pcall(f, unpack(args)) end)
+                end
+            else
+                base.spawn = function(f, ...)
+                    if type(f) ~= "function" then return end
+                    local args = {...}
+                    local co = coroutine.create(function() pcall(f, unpack(args)) end)
+                    coroutine.resume(co)
+                    return co
+                end
+            end
+        end
+        if type(base.delay) ~= "function" then
+            if type(delay) == "function" then
+                base.delay = function(n, f) delay(n, function() pcall(f) end) end
+            else
+                base.delay = function(n, f) base.spawn(function() base.wait(n); pcall(f) end) end
+            end
+        end
+        if type(base.defer) ~= "function" then
+            base.defer = function(f, ...) base.spawn(f, ...) end
+        end
+        return base
+    end)
+    if ok and type(t) == "table" then return t end
+    -- Absolute last-resort fallback
+    local fb = {}
+    fb.wait = (type(wait) == "function") and function(t) return wait(t) end or function() end
+    fb.spawn = (type(spawn) == "function") and function(f, ...) local a = {...}; spawn(function() pcall(f, unpack(a)) end) end or function() end
+    fb.delay = (type(delay) == "function") and function(n, f) delay(n, f) end or function() end
+    fb.defer = function(f, ...) fb.spawn(f, ...) end
+    return fb
+end)()
+
 local MAX_WAITS = 20
 local wait_count = 0
 while not game:IsLoaded() and wait_count < MAX_WAITS do
@@ -153,7 +201,7 @@ local flingBodyAV = nil
 
 local originalLighting = {}
 local originalFog = {}
-local toggleKey = Enum.KeyCode.RightShift
+local minimizeKey = Enum.KeyCode.RightShift
 local lastSpawnTime = 0
 local now = type(tick) == "function" and tick or os.clock
 
@@ -190,7 +238,29 @@ local function safeHttpGet(url)
     return nil
 end
 
--- Theme colors configuration
+-- Clipboard compatibility (setclipboard/toclipboard/copyclipboard)
+local function safeSetClipboard(text)
+    if type(setclipboard) == "function" then
+        pcall(setclipboard, text)
+    elseif type(toclipboard) == "function" then
+        pcall(toclipboard, text)
+    elseif type(copyclipboard) == "function" then
+        pcall(copyclipboard, text)
+    end
+end
+
+-- Mouse location compatibility (GetMouseLocation/GetMousePosition)
+local function getMouseLocation()
+    if UserInputService then
+        if type(UserInputService.GetMouseLocation) == "function" then
+            return UserInputService:GetMouseLocation()
+        elseif type(UserInputService.GetMousePosition) == "function" then
+            return UserInputService:GetMousePosition()
+        end
+    end
+    return Vector2.new(0, 0)
+end
+
 -- Notification system
 local function getGuiParent()
     local ok, coreGui = pcall(function() return game:GetService("CoreGui") end)
@@ -793,7 +863,7 @@ local function getAimbotTarget()
             if part and hum and hum.Health > 0 then
                 local pos, onScreen = camera:WorldToViewportPoint(part.Position)
                 if onScreen then
-                    local mousePos = UserInputService:GetMouseLocation()
+                    local mousePos = getMouseLocation()
                     local screenDist = (Vector2.new(pos.X, pos.Y) - mousePos).Magnitude
                     if screenDist < dist then
                         dist = screenDist
@@ -996,7 +1066,7 @@ local function giveBtools()
         t.Activated:Connect(function()
             local mouse = LocalPlayer:GetMouse()
             local target = mouse.Target
-            if target and target ~= WorkspaceTerrain and not target:IsA("Terrain") then
+            if target and not target:IsA("Terrain") then
                 if name == "Destructor" then
                     pcall(function() target:Destroy() end)
                 elseif name == "CloneBin" then
@@ -1021,19 +1091,19 @@ local function copyPosition()
     if root then
         local pos = root.Position
         local str = string.format("%.2f, %.2f, %.2f", pos.X, pos.Y, pos.Z)
-        local ok = pcall(function() setclipboard(str) end)
-        notify("Clipboard", ok and "Copied coordinates: " .. str or "Failed to write coordinates", 3)
+        safeSetClipboard(str)
+        notify("Clipboard", "Copied coordinates: " .. str, 3)
     end
 end
 
 local function copyPlaceId()
-    local ok = pcall(function() setclipboard(tostring(game.PlaceId)) end)
-    notify("Clipboard", ok and "Copied PlaceID: " .. game.PlaceId or "Failed to copy PlaceID", 2)
+    safeSetClipboard(tostring(game.PlaceId))
+    notify("Clipboard", "Copied PlaceID: " .. game.PlaceId, 2)
 end
 
 local function copyJobId()
-    local ok = pcall(function() setclipboard(tostring(game.JobId)) end)
-    notify("Clipboard", ok and "Copied JobID!" or "Failed to copy JobID", 2)
+    safeSetClipboard(tostring(game.JobId))
+    notify("Clipboard", "Copied JobID!", 2)
 end
 
 local function boostFps()
@@ -1291,7 +1361,7 @@ local function buildUI()
         end
     end
     
-    local tabs = {"Main", "Movement", "Combat", "Aim", "Visuals", "Utility"}
+    local tabs = {"Main", "Movement", "Combat", "Aim", "Visuals", "Utility", "Settings"}
     
     for i, tn in ipairs(tabs) do
         -- Button
@@ -1597,19 +1667,92 @@ local function buildUI()
         end)
     end
     
+    local function addKeybind(tab, txt, defaultKey, cb)
+        local f = Instance.new("Frame")
+        f.Size = UDim2.new(1, 0, 0, 38)
+        f.BackgroundColor3 = C.surface
+        f.BorderSizePixel = 0
+        f.Parent = tabContents[tab]
+        corner(f, 8)
+        stroke(f, C.border, 1)
+        
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, -100, 1, 0)
+        label.Position = UDim2.new(0, 12, 0, 0)
+        label.BackgroundTransparency = 1
+        label.Font = Enum.Font.GothamMedium
+        label.TextSize = 12
+        label.TextColor3 = C.text
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = txt
+        label.Parent = f
+        
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 80, 0, 24)
+        btn.Position = UDim2.new(1, -92, 0.5, -12)
+        btn.BackgroundColor3 = C.bg
+        btn.BorderSizePixel = 0
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 11
+        btn.TextColor3 = C.accent
+        btn.Text = defaultKey.Name
+        btn.AutoButtonColor = false
+        btn.Parent = f
+        corner(btn, 6)
+        stroke(btn, C.border, 1)
+        
+        local listening = false
+        local con
+        btn.MouseButton1Click:Connect(function()
+            if listening then return end
+            listening = true
+            btn.BackgroundColor3 = Color3.fromRGB(220, 80, 80)
+            btn.Text = "..."
+            local oldC = btn.BackgroundColor3
+            con = UserInputService.InputBegan:Connect(function(input, proc)
+                if proc then return end
+                if input.KeyCode ~= Enum.KeyCode.Unknown then
+                    listening = false
+                    con:Disconnect()
+                    btn.BackgroundColor3 = C.bg
+                    btn.Text = input.KeyCode.Name
+                    minimizeKey = input.KeyCode
+                    pcall(cb, input.KeyCode)
+                end
+            end)
+        end)
+        
+        btn.MouseEnter:Connect(function()
+            if not listening then
+                TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = C.accentH}):Play()
+            end
+        end)
+        btn.MouseLeave:Connect(function()
+            if not listening then
+                TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = C.bg}):Play()
+            end
+        end)
+    end
+    
     -- Populate Tab Contents
+    
+    -- Settings Tab
+    addSectionHeader("Settings", "Keybinds")
+    addKeybind("Settings", "Minimize Keybind", minimizeKey, function(key)
+        minimizeKey = key
+    end)
     
     -- Main Tab
     addSectionHeader("Main", "General")
     addButton("Main", "Join Discord Server", function()
-        local ok = pcall(function() setclipboard(DISCORD_INVITE) end)
+        safeSetClipboard(DISCORD_INVITE)
         pcall(function()
             local guiService = game:GetService("GuiService")
             if guiService and guiService.OpenBrowserWindow then
                 guiService:OpenBrowserWindow(DISCORD_INVITE)
             end
         end)
-        notify("Capy.gg", ok and "Copied Discord Invite Link!" or "Link: " .. DISCORD_INVITE, 3)
+        notify("Capy.gg", "Discord invite link: " .. DISCORD_INVITE, 3)
     end)
     addButton("Main", "Load Infinite Yield", loadInfiniteYield)
     addButton("Main", "Open Infinite Yield UI", function()
@@ -2047,18 +2190,52 @@ local function buildUI()
     
     selectTab("Main")
     
+    -- Minimize button
+    local minBtn = Instance.new("TextButton")
+    minBtn.Size = UDim2.new(0, 16, 0, 16)
+    minBtn.Position = UDim2.new(1, -48, 0, 12)
+    minBtn.BackgroundColor3 = Color3.fromRGB(34, 197, 94)
+    minBtn.Text = "-"
+    minBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    minBtn.TextScaled = true
+    minBtn.AutoButtonColor = false
+    minBtn.Parent = win
+    corner(minBtn, 8)
+    stroke(minBtn, Color3.fromRGB(25, 150, 70), 1)
+    
+    minBtn.MouseButton1Click:Connect(function()
+        toggleMenu()
+    end)
+    
+    minBtn.MouseEnter:Connect(function()
+        TweenService:Create(minBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(50, 220, 110)}):Play()
+    end)
+    minBtn.MouseLeave:Connect(function()
+        TweenService:Create(minBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(34, 197, 94)}):Play()
+    end)
+    
     -- Close button
     local closeBtn = Instance.new("TextButton")
     closeBtn.Size = UDim2.new(0, 16, 0, 16)
     closeBtn.Position = UDim2.new(1, -28, 0, 12)
     closeBtn.BackgroundColor3 = Color3.fromRGB(239, 68, 68)
-    closeBtn.Text = ""
+    closeBtn.Text = "X"
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.TextScaled = true
+    closeBtn.AutoButtonColor = false
     closeBtn.Parent = win
     corner(closeBtn, 8)
     stroke(closeBtn, Color3.fromRGB(180, 50, 50), 1)
     
     closeBtn.MouseButton1Click:Connect(function()
         _G.CapyCleanUp()
+    end)
+    
+    closeBtn.MouseEnter:Connect(function()
+        TweenService:Create(closeBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(255, 100, 100)}):Play()
+    end)
+    closeBtn.MouseLeave:Connect(function()
+        TweenService:Create(closeBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(239, 68, 68)}):Play()
     end)
     
     -- Show/Hide handler
@@ -2077,7 +2254,7 @@ local function buildUI()
     end
     
     connections["ToggleMenu"] = UserInputService.InputBegan:Connect(function(input, processed)
-        if not processed and input.KeyCode == toggleKey then
+        if not processed and input.KeyCode == minimizeKey then
             toggleMenu()
         end
     end)
@@ -2423,7 +2600,7 @@ connections["ClickDestroyInput"] = UserInputService.InputBegan:Connect(function(
             if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl) then
                 local mouse = LocalPlayer:GetMouse()
                 local target = mouse.Target
-                if target and target ~= WorkspaceTerrain and not target:IsA("Terrain") then
+                if target and not target:IsA("Terrain") then
                     pcall(function() target:Destroy() end)
                     notify("Utilities", "Destroyed object locally.", 2)
                 end
